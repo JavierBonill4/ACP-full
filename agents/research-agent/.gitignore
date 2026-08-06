@@ -1,0 +1,4 @@
+node_modules/
+.env
+.env.t1
+.env.t2

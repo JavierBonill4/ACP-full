@@ -1,0 +1,313 @@
+// Everything the chain deliberately does not hold: agent endpoints,
+// descriptors, categories, and the full text of specs, plans, and
+// deliverables. The chain holds money, the reputation record, and 32-byte
+// digests of the text below.
+//
+// SQLite for local dev. For Postgres change the provider and run
+// `prisma migrate dev` — the only Postgres-specific thing to add is a real
+// enum for Kind/JobType/JobState if you want the DB to enforce them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// One row per wallet the platform has ever seen, in either role. The
+/// authoritative reputation lives on-chain in WalletProfile; `cachedWrs` and
+/// the counters here are a read-through cache for list views so rendering the
+/// agents page does not require an RPC round-trip per card.
+model Wallet {
+  address   String   @id
+  createdAt DateTime @default(now())
+
+  /// 1 RECONCILED | 2 METERED. Mirrors WalletProfile.tier.
+  tier Int @default(1)
+
+  // --- cached from chain, refreshed on settlement and on demand ---
+  cachedWrs           BigInt   @default(0)
+  jobsCompleted       Int      @default(0)
+  jobsRejected        Int      @default(0)
+  jobsExpired         Int      @default(0)
+  totalValueSettled   BigInt   @default(0)
+  chainFirstSeen      DateTime?
+  chainSyncedAt       DateTime?
+
+  agents            Agent[]
+  employerJobs      Job[]           @relation("employer")
+  challenges        AuthChallenge[]
+  ratingsGiven      Rating[]        @relation("rater")
+  ratingsReceived   Rating[]        @relation("ratee")
+
+  @@index([cachedWrs])
+}
+
+/// Sign-in challenge. The wallet signs `message`, the server verifies with
+/// ed25519 and issues a session JWT. Single-use and short-lived — a replayed
+/// signature must not be a valid login.
+model AuthChallenge {
+  id        String   @id @default(cuid())
+  address   String
+  nonce     String   @unique
+  message   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  wallet Wallet @relation(fields: [address], references: [address], onDelete: Cascade)
+
+  @@index([address, expiresAt])
+}
+
+/// Single-purpose agents are grouped by these. Seeded with security-audit,
+/// predictive-betting and teacher; operators may add more at agent creation.
+///
+/// Never deleted. An empty category is hidden from the window rather than
+/// removed, so the history of agents that used to sit in it stays readable.
+model Category {
+  id        String   @id @default(cuid())
+  /// Lowercase, hyphenated, punctuation-stripped. This is the dedup key:
+  /// "Security Audits", "security_audits" and "SECURITY AUDITS" all collapse
+  /// to `security-audits` and reuse the existing row.
+  slug        String   @unique
+  label       String
+  description String?
+  /// Seeded categories cannot be renamed by users.
+  isSeed      Boolean  @default(false)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  agents Agent[]
+  jobs   Job[]
+
+  @@index([slug])
+}
+
+/// An agent is a wallet plus an endpoint plus a self-authored descriptor.
+///
+/// There is no code hash, no code bundle, and no code reputation. Operators
+/// host wherever they want; the platform knows a URL and an outcome history.
+model Agent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Reputation subject and payout destination. Two agents under one wallet
+  /// share one reputation — deliberately, since one operator stands behind
+  /// both.
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  name    String
+  summary String
+
+  /// "GENERAL" | "SINGLE_PURPOSE".
+  ///
+  /// This field alone decides which window the agent appears in. A GENERAL
+  /// agent must have no category; a SINGLE_PURPOSE agent must have one. Both
+  /// halves are enforced in services/agents.ts, because routing on "did they
+  /// happen to pick a category" is exactly how agents ended up in the wrong
+  /// view.
+  kind String
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  /// Called by the platform. See ARCHITECTURE.md §3.1 for the contract.
+  endpoint String
+  /// HMAC key for dispatch in both directions. Shown to the operator once at
+  /// registration and never again.
+  sharedSecret String
+  // --- T2 only: provider key held for gateway-proxied calls ---
+  //
+  // Tier 2 is the only tier where the platform touches key material, which is
+  // exactly why tier 1 exists. AES-256-GCM under a server-held secret — see
+  // services/keyvault.ts, and note that this is not a KMS and must not be
+  // described as one. A tier 1 agent leaves all of these null, permanently.
+  providerKeyCiphertext String?
+  providerKeyIv         String?
+  providerKeyTag        String?
+  /// Last 4 characters only, so the operator can confirm which key is stored.
+  providerKeyHint       String?
+  providerKeySetAt      DateTime?
+
+  /// Operator-authored self-description, validated against a JSON Schema.
+  /// Free-form within that schema and never hashed on-chain.
+  descriptor String
+
+  /// Indicative pricing lifted out of the descriptor for sorting and for
+  /// pre-filling the hire form. Base units.
+  basePlanningFee BigInt @default(0)
+  baseFixedFee    BigInt @default(0)
+  avgCompletionMinutes Int @default(60)
+
+  tier Int @default(1)
+
+  /// "ACTIVE" | "UNREACHABLE" | "SUSPENDED"
+  status         String    @default("ACTIVE")
+  lastHealthyAt  DateTime?
+  lastHealthError String?
+
+  jobs Job[]
+
+  @@index([kind, categoryId])
+  @@index([walletAddress])
+  @@index([status])
+}
+
+/// Mirrors the on-chain Job. `pda` is null until the employer's post
+/// transaction confirms — the row is written first so the UI has something to
+/// show while the wallet prompt is open, and reconciled by the indexer.
+model Job {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// On-chain PDA, and the nonce it was derived from.
+  pda   String? @unique
+  nonce Int
+
+  employerAddress String
+  employer        Wallet @relation("employer", fields: [employerAddress], references: [address])
+
+  agentId String?
+  agent   Agent?  @relation(fields: [agentId], references: [id])
+
+  /// Denormalised so a job survives its agent being deleted, and so the
+  /// settlement path never has to join to find the payout wallet.
+  agentAddress String?
+
+  /// "OPEN" (custom job, general window) | "DIRECT" (specific hire,
+  /// single-purpose window)
+  jobType String
+
+  /// Set for DIRECT jobs, and for OPEN jobs the employer wants routed to a
+  /// particular category's general agents. Display only.
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  title String
+  /// OPEN | OFFERED | CLAIMED | PLAN_PENDING | IN_PROGRESS | REVIEW_PENDING |
+  /// SETTLED | EXPIRED | CANCELLED
+  state String @default("OPEN")
+
+  // --- the text the chain only ever sees a digest of ---
+  specText        String
+  specHash        String
+  planText        String?
+  planHash        String?
+  deliverableText String?
+  deliverableHash String?
+
+  // --- economics, base units, mirroring the on-chain Job ---
+  planningFeeCap   BigInt
+  fixedFeeCap      BigInt
+  planningTokenCap BigInt
+  tokenBudgetCap   BigInt
+  planningFee      BigInt @default(0)
+  fixedFee         BigInt @default(0)
+  bond             BigInt @default(0)
+
+  planningTokensUsed  BigInt @default(0)
+  executionTokensUsed BigInt @default(0)
+
+  minTier     Int  @default(1)
+  claimedTier Int?
+
+  // --- timers ---
+  deadline        DateTime
+  offerExpiresAt  DateTime?
+  claimExpiresAt  DateTime?
+  reviewExpiresAt DateTime?
+  holdbackUntil   DateTime?
+  holdbackAmount  BigInt    @default(0)
+
+  rating       Int?
+  autoAccepted Boolean @default(false)
+
+  /// Set when settlement confirms, so the UI can link to the explorer.
+  settleTx String?
+
+  usageReports UsageReport[]
+  ratings      Rating[]
+  events       JobEvent[]
+
+  @@index([state, jobType])
+  @@index([employerAddress])
+  @@index([agentId])
+  @@index([categoryId])
+}
+
+/// Append-only. Every state transition, who caused it, and the signature if it
+/// touched the chain. This is the audit trail the on-chain events are indexed
+/// into, and what the job timeline in the UI renders from.
+model JobEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  jobId String
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  kind    String
+  actor   String?
+  detail  String?
+  txSig   String?
+
+  @@index([jobId, createdAt])
+}
+
+/// Oracle-submitted token usage. Written here first, then to the chain, so a
+/// failed transaction leaves a record to retry from rather than silently
+/// dropping a metered call.
+model UsageReport {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  jobId String
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  /// 0 planning | 1 execution
+  phase  Int
+  /// USDC base units, already converted at the job's pinned rate card version.
+  amount BigInt
+
+  model            String?
+  inputTokens      Int?
+  outputTokens     Int?
+  rateCardVersion  Int      @default(1)
+
+  /// Null until the on-chain report_usage confirms.
+  txSig     String?
+  confirmed Boolean @default(false)
+
+  @@index([jobId, phase])
+}
+
+/// Both columns exist from day one so v2 employer normalization is a backfill
+/// rather than a migration. In MVP `normalizedRating` == `rawRating`.
+model Rating {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  jobId String @unique
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  raterAddress String
+  rater        Wallet @relation("rater", fields: [raterAddress], references: [address])
+  rateeAddress String
+  ratee        Wallet @relation("ratee", fields: [rateeAddress], references: [address])
+
+  /// 0..10, 5 neutral.
+  rawRating        Int
+  normalizedRating Int
+  comment          String?
+  /// True when the rating came from an expired review window rather than a
+  /// human. An employer whose ratings are overwhelmingly auto-generated is not
+  /// producing a quality signal.
+  auto             Boolean @default(false)
+
+  @@index([rateeAddress])
+}

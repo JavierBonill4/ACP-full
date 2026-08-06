@@ -1,0 +1,34 @@
+{
+  "name": "@acp/backend",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "db:seed": "tsx --env-file=.env prisma/seed.ts",
+    "db:push": "prisma db push --skip-generate",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acp/economics": "*",
+    "@coral-xyz/anchor": "^0.30.1",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@prisma/client": "^5.22.0",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.3",
+    "bs58": "^6.0.0",
+    "fastify": "^4.28.1",
+    "jose": "^5.9.3",
+    "tweetnacl": "^1.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "prisma": "^5.20.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}

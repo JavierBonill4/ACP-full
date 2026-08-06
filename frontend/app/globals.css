@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink text-white/90 antialiased;
+}
+
+/* The wallet-adapter modal ships its own light-ish styling. Rather than fight
+   it per-component, re-skin the handful of variables it actually reads. */
+.wallet-adapter-button-trigger {
+  @apply !rounded-lg !bg-accent !px-3.5 !py-2 !text-sm !font-medium !leading-none;
+  height: auto !important;
+}
+
+.wallet-adapter-modal-wrapper {
+  @apply !bg-ink-soft;
+}
+
+.wallet-adapter-modal-title {
+  @apply !text-base !text-white;
+}
+
+.wallet-adapter-modal-list li button {
+  @apply !bg-ink !text-white/80;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full border-2 border-solid border-transparent bg-white/10 bg-clip-content;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-white/20 bg-clip-content;
+}

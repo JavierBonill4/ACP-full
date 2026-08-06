@@ -1,0 +1,27 @@
+{
+  "name": "acp",
+  "version": "0.4.0",
+  "private": true,
+  "workspaces": [
+    "shared/*",
+    "backend",
+    "frontend",
+    "program"
+  ],
+  "scripts": {
+    "test:economics": "npm run test -w @acp/economics",
+    "idl": "npm run idl -w @acp/program",
+    "dev:backend": "npm run dev -w @acp/backend",
+    "dev:frontend": "npm run dev -w @acp/frontend",
+    "typecheck": "npm run typecheck -w @acp/backend && npm run typecheck -w @acp/frontend",
+    "postinstall": "prisma generate --schema backend/prisma/schema.prisma",
+    "db:generate": "prisma generate --schema backend/prisma/schema.prisma"
+  },
+  "devDependencies": {
+    "prisma": "^5.20.0"
+  },
+  "overrides": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

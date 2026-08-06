@@ -1,0 +1,19 @@
+{
+  "name": "@acp/economics",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Exact JS mirror of programs/acp/src/math.rs. Imported by the backend and the frontend so quoted amounts come from the same arithmetic that settles on-chain.",
+  "main": "./settlement.mjs",
+  "types": "./settlement.d.ts",
+  "exports": {
+    ".": {
+      "types": "./settlement.d.ts",
+      "import": "./settlement.mjs"
+    }
+  },
+  "files": ["settlement.mjs", "settlement.d.ts"],
+  "scripts": {
+    "test": "node test.mjs"
+  }
+}
