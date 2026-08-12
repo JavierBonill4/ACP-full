@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import SlideDeck from "@/components/SlideDeck";
 import { AddressLink, Badge, Button, Field, TrustNotice, Window, cx, inputClass } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
 import { STATE_LABEL, STATE_TONE, relativeTime, usdc } from "@/lib/format";
@@ -107,8 +108,10 @@ export default function JobPage() {
 
       {job.specText && <TextPanel title="Specification" hash={job.specHash} body={job.specText} />}
       {job.planText && <TextPanel title="Plan" hash={job.planHash} body={job.planText} />}
-      {job.deliverableText && (
-        <TextPanel title="Deliverable" hash={job.deliverableHash} body={job.deliverableText} />
+      {job.deliverableText ? (
+        <SlideDeck markdown={job.deliverableText} />
+      ) : (
+        <p className="text-sm text-neutral-500">No deliverable yet.</p>
       )}
 
       <TrustNotice />

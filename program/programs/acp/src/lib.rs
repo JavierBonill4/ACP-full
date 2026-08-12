@@ -17,7 +17,7 @@ use errors::AcpError;
 use math::*;
 use state::*;
 
-declare_id!("ACPv4Wa11etRep11111111111111111111111111111");
+declare_id!("FDBD4h5mZsYG8myfEE7NFFtmhuWqt5MJNHvgyfW57eYK");
 
 #[program]
 pub mod acp {

@@ -555,6 +555,8 @@ async function notifyAgent(agent: Agent, job: Job, route: "plan" | "execute" | "
     jobId: job.id,
     pda: job.pda,
     title: job.title,
+    state: job.state,          // <- add
+    jobType: job.jobType,
     spec: job.specText,
     specHash: job.specHash,
     plan: job.planText,

@@ -6,6 +6,7 @@
     "shared/*",
     "backend",
     "frontend",
+    "agents",
     "program"
   ],
   "scripts": {

@@ -114,8 +114,10 @@ async function call<T>(
   path: string,
   secret: string,
   payload: unknown,
-  method: "GET" | "POST" = "POST"
+  method: "GET" | "POST" = "POST",
+  timeoutMs: number = env.AGENT_DISPATCH_TIMEOUT_MS
 ): Promise<DispatchResult<T>> {
+  
   const started = Date.now();
   const url = new URL(path.replace(/^\//, ""), endpoint.endsWith("/") ? endpoint : `${endpoint}/`);
 
@@ -127,8 +129,8 @@ async function call<T>(
 
   const body = method === "POST" ? JSON.stringify(payload ?? {}) : undefined;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), env.AGENT_DISPATCH_TIMEOUT_MS);
-
+  // const timer = setTimeout(() => controller.abort(), env.AGENT_DISPATCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method,
@@ -210,15 +212,30 @@ export interface ExecuteResponse {
 }
 
 export const dispatch = {
+  // Health is a liveness probe. A slow one is a failing one.
   health: (endpoint: string, secret: string) =>
-    call<HealthResponse>(endpoint, "health", secret, null, "GET"),
+    call<HealthResponse>(endpoint, "health", secret, null, "GET", env.AGENT_HEALTH_TIMEOUT_MS),
 
+  // These two now only wait for a 202.
   plan: (endpoint: string, secret: string, payload: unknown) =>
-    call<PlanResponse>(endpoint, "plan", secret, payload),
+    call<{ accepted: boolean }>(endpoint, "plan", secret, payload),
 
   execute: (endpoint: string, secret: string, payload: unknown) =>
-    call<ExecuteResponse>(endpoint, "execute", secret, payload),
+    call<{ accepted: boolean }>(endpoint, "execute", secret, payload),
 
   cancel: (endpoint: string, secret: string, payload: unknown) =>
     call<{ ok: boolean }>(endpoint, "cancel", secret, payload),
 };
+// export const dispatch = {
+//   health: (endpoint: string, secret: string) =>
+//     call<HealthResponse>(endpoint, "health", secret, null, "GET"),
+
+//   plan: (endpoint: string, secret: string, payload: unknown) =>
+//     call<PlanResponse>(endpoint, "plan", secret, payload),
+
+//   execute: (endpoint: string, secret: string, payload: unknown) =>
+//     call<ExecuteResponse>(endpoint, "execute", secret, payload),
+
+//   cancel: (endpoint: string, secret: string, payload: unknown) =>
+//     call<{ ok: boolean }>(endpoint, "cancel", secret, payload),
+// };

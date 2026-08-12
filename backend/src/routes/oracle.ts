@@ -6,8 +6,14 @@ import { prisma, serialize } from "../db.js";
 import { oracleKeypair } from "../chain.js";
 import { registerRawJsonParser, type RawBody } from "../rawBody.js";
 import { assertAgentOwnsJob, requireAgent } from "../services/agentAuth.js";
-import { verifySignature } from "../services/dispatch.js";
-import { acceptPlan, event, finalizeJob, submitDeliverable } from "../services/jobs.js";
+import {
+  acceptOffer,
+  acceptPlan,
+  event,
+  finalizeJob,
+  submitDeliverable,
+  submitPlan,
+} from "../services/jobs.js";
 import { publishedRateCard } from "../services/ratecard.js";
 import { PHASE_EXECUTION, PHASE_PLANNING, recordUsage, usageBreakdown } from "../services/usage.js";
 
@@ -162,38 +168,94 @@ export const oracleRoutes: FastifyPluginAsync = async (app) => {
   });
 };
 
+// ---------------------------------------------------------------------------
+
 /**
- * Agent-initiated callbacks. Same HMAC as everything else an agent sends.
+ * The agent-facing API. **This is the only way an agent acts on a job.**
+ *
+ * Every other route that advances a job is wallet-authenticated, because it is
+ * meant for a human in a browser holding a private key. An agent has an HMAC
+ * secret and no wallet session, so without this it could be dispatched work it
+ * had no way to accept, plan, or deliver — which is exactly the state the first
+ * version shipped in: jobs reached CLAIMED and sat there until `claim_ttl`
+ * expired and the bond was slashed.
+ *
+ * Each kind maps to the same service function the browser path uses, so the
+ * state machine cannot diverge between the two entry points.
  */
 export const callbackRoutes: FastifyPluginAsync = async (app) => {
   registerRawJsonParser(app);
 
+  const usdc = z
+    .number()
+    .min(0)
+    .max(100_000)
+    .transform((n) => BigInt(Math.round(n * 1_000_000)));
+
+  const callbackSchema = z.discriminatedUnion("kind", [
+    /** Direct hire: the agent takes the offer. Must happen inside `accept_ttl`. */
+    z.object({ kind: z.literal("accept-offer") }),
+
+    /**
+     * The agent's proposal. Fees are decimal USDC here and converted to base
+     * units before they reach `submitPlan`, which validates them against the
+     * ceilings the employer funded.
+     */
+    z.object({
+      kind: z.literal("plan"),
+      outline: z.string().min(20).max(20_000),
+      planningFeeUsdc: usdc,
+      fixedFeeUsdc: usdc,
+    }),
+
+    z.object({
+      kind: z.literal("deliverable"),
+      deliverable: z.string().min(1).max(200_000),
+    }),
+
+    z.object({
+      kind: z.enum(["progress", "error"]),
+      message: z.string().max(2000).optional(),
+    }),
+  ]);
+
   app.post("/jobs/:id/callback", { preHandler: requireAgent }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const agent = req.agent!;
+
+    // Authentication says *which* agent; this says whether it holds *this* job.
+    // Without the second check any registered agent could deliver against any
+    // job and collect the fee.
     await assertAgentOwnsJob(agent, id);
 
-    const body = z
-      .object({
-        kind: z.enum(["deliverable", "progress", "error"]),
-        deliverable: z.string().max(200_000).optional(),
-        message: z.string().max(2000).optional(),
-      })
-      .parse((req.body as RawBody).parsed);
+    const body = callbackSchema.parse((req.body as RawBody).parsed);
 
-    if (body.kind === "deliverable") {
-      if (!body.deliverable) return reply.code(400).send({ error: "Missing deliverable" });
-      return serialize(await submitDeliverable(agent.walletAddress, id, body.deliverable));
+    switch (body.kind) {
+      case "accept-offer":
+        return serialize(await acceptOffer(agent.walletAddress, id));
+
+      case "plan":
+        return serialize(
+          await submitPlan(agent.walletAddress, id, {
+            outline: body.outline,
+            planningFee: body.planningFeeUsdc,
+            fixedFee: body.fixedFeeUsdc,
+          })
+        );
+
+      case "deliverable":
+        return serialize(await submitDeliverable(agent.walletAddress, id, body.deliverable));
+
+      default:
+        await event(
+          id,
+          body.kind === "error" ? "AGENT_ERROR" : "AGENT_PROGRESS",
+          agent.walletAddress,
+          body.message ?? null
+        );
+        return { ok: true };
     }
-
-    await event(
-      id,
-      body.kind === "error" ? "AGENT_ERROR" : "AGENT_PROGRESS",
-      agent.walletAddress,
-      body.message ?? null
-    );
-    return { ok: true };
   });
 };
 
-export { PHASE_EXECUTION, PHASE_PLANNING, verifySignature, formatUsdc };
+export { PHASE_EXECUTION, PHASE_PLANNING, formatUsdc };

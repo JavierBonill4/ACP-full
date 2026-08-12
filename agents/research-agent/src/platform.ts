@@ -58,6 +58,58 @@ export class PlatformError extends Error {
 export const PHASE_PLANNING = 0 as const;
 export const PHASE_EXECUTION = 1 as const;
 
+// ---------------------------------------------------------------------------
+// Job actions
+//
+// All of these go through POST /jobs/:id/callback, which is the only
+// agent-facing way to advance a job. Every other route that moves a job is
+// wallet-authenticated and meant for a human in a browser; an agent holds an
+// HMAC secret and no wallet session.
+// ---------------------------------------------------------------------------
+
+/**
+ * Take a direct hire. Must happen inside the 6h `accept_ttl` or the employer's
+ * escrow returns in full and the offer is gone.
+ */
+export async function acceptOffer(jobId: string) {
+  return call(`/jobs/${jobId}/callback`, { kind: "accept-offer" });
+}
+
+/**
+ * Submit the proposal. Fees are decimal USDC and must fit inside the ceilings
+ * the employer funded — the platform refuses anything above them rather than
+ * negotiating, so quoting high is a wasted round trip.
+ *
+ * This starts the employer's 72h review clock. If they say nothing it
+ * auto-accepts, so a silent employer cannot strand the agent's capital.
+ */
+export async function submitPlan(
+  jobId: string,
+  plan: { outline: string; planningFeeUsdc: number; fixedFeeUsdc: number }
+) {
+  return call(`/jobs/${jobId}/callback`, { kind: "plan", ...plan });
+}
+
+/**
+ * Hand back the finished work. Moves the job to REVIEW_PENDING and starts the
+ * second 72h review window.
+ */
+export async function submitDeliverable(jobId: string, deliverable: string) {
+  return call(`/jobs/${jobId}/callback`, { kind: "deliverable", deliverable });
+}
+
+export async function postProgress(jobId: string, message: string) {
+  return call(`/jobs/${jobId}/callback`, { kind: "progress", message });
+}
+
+export async function postError(jobId: string, message: string) {
+  return call(`/jobs/${jobId}/callback`, { kind: "error", message });
+}
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+
 /**
  * Self-report token usage. **Tier 1 only** — the platform rejects this from a
  * tier 2 agent, because T2's whole claim is that it does not count its own work.
@@ -77,23 +129,6 @@ export async function reportUsage(
     cap: string;
     remaining: string;
   }>(`/oracle/jobs/${jobId}/usage`, { phase, ...usage });
-}
-
-export async function postProgress(jobId: string, message: string) {
-  return call(`/jobs/${jobId}/callback`, { kind: "progress", message });
-}
-
-export async function postError(jobId: string, message: string) {
-  return call(`/jobs/${jobId}/callback`, { kind: "error", message });
-}
-
-/**
- * Hand back the finished deck. This is what moves the job to REVIEW_PENDING and
- * starts the employer's 72h review clock — after which it auto-accepts at a
- * neutral rating, so a silent employer cannot strand the agent's capital.
- */
-export async function submitDeliverable(jobId: string, deliverable: string) {
-  return call(`/jobs/${jobId}/callback`, { kind: "deliverable", deliverable });
 }
 
 // ---------------------------------------------------------------------------

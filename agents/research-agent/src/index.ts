@@ -2,7 +2,15 @@ import Fastify from "fastify";
 import { z } from "zod";
 
 import { STUB_MODE, config, tierLabel } from "./config.js";
-import { PlatformError, postError, postProgress, submitDeliverable, verify } from "./platform.js";
+import {
+  PlatformError,
+  acceptOffer,
+  postError,
+  postProgress,
+  submitDeliverable,
+  submitPlan,
+  verify,
+} from "./platform.js";
 import { buildPlan, research } from "./research.js";
 import { syncRateCard } from "./ratecard.js";
 
@@ -13,6 +21,12 @@ import { syncRateCard } from "./ratecard.js";
  * caller and signs everything it sends, so every route below verifies the HMAC
  * before doing anything — an endpoint URL is not a secret, and without the
  * check anyone who found this host could make it burn tokens on their behalf.
+ *
+ * **Both work routes return 202 and report back via callback.** The platform's
+ * dispatch timeout only has to cover an acknowledgement, so it can stay short
+ * (15s) while the work itself runs against the job deadline, which is measured
+ * in days. Holding an HTTP connection open for a multi-minute model call is a
+ * good way to lose finished work to a proxy timeout.
  */
 
 const app = Fastify({ logger: { level: "info" } });
@@ -46,6 +60,9 @@ const jobSchema = z.object({
   title: z.string().default("Untitled job"),
   spec: z.string().default(""),
   plan: z.string().nullable().optional(),
+  /** OPEN | OFFERED | CLAIMED | ... — decides whether the offer needs taking first. */
+  state: z.string().default("CLAIMED"),
+  jobType: z.enum(["OPEN", "DIRECT"]).default("OPEN"),
   deadline: z.string().optional(),
   caps: z
     .object({
@@ -57,12 +74,14 @@ const jobSchema = z.object({
     .optional(),
 });
 
+type Job = z.infer<typeof jobSchema>;
+
 // ---------------------------------------------------------------------------
 
 /** Unsigned by design — it carries no payload and reveals nothing sensitive. */
 app.get("/health", async () => ({
   ok: true,
-  version: "0.1.0",
+  version: "0.2.0",
   agent: "research-agent",
   tier: config.TIER,
   tierLabel,
@@ -70,49 +89,67 @@ app.get("/health", async () => ({
 }));
 
 /**
- * Quote the job. Fees come from config and must fit inside the ceilings the
- * employer already funded — the platform rejects anything above them, so
- * quoting high is a wasted round trip rather than a negotiation.
+ * Quote the job. Acknowledges immediately and submits the plan by callback.
+ *
+ * A direct hire arrives in OFFERED and has to be accepted before a plan is
+ * valid — `submitPlan` requires CLAIMED. Doing it here rather than making the
+ * platform dispatch a fifth route keeps the endpoint contract at four, and puts
+ * the "do I want this job" decision in the agent, where it belongs.
  */
 app.post("/plan", async (req, reply) => {
   if (!authenticate(req as never)) return reply.code(401).send({ error: "Bad signature" });
 
   const job = jobSchema.parse((req.body as Raw).parsed);
-  app.log.info({ jobId: job.jobId }, "planning");
+  app.log.info({ jobId: job.jobId, state: job.state }, "planning");
 
+  void planAndSubmit(job);
+  return reply.code(202).send({ accepted: true });
+});
+
+async function planAndSubmit(job: Job) {
   try {
+    if (job.state === "OFFERED") {
+      await acceptOffer(job.jobId);
+      app.log.info({ jobId: job.jobId }, "offer accepted");
+    }
+
     const plan = await buildPlan(job.jobId, job.title, job.spec);
 
+    // Bid at the employer's ceiling rather than above it. The platform refuses
+    // anything higher, and a job at a lower fee still earns reputation — which
+    // is the scarcer thing when you have none.
     const ceiling = job.caps?.fixedFeeUsdc;
     if (ceiling !== undefined && plan.fixedFeeUsdc > ceiling) {
-      // Take the ceiling rather than bidding above it and being refused. A job
-      // at a lower fee is still worth reputation, which is the scarcer thing
-      // when you have none.
       app.log.warn(
         { asked: plan.fixedFeeUsdc, ceiling },
         "employer ceiling is below the asking fee; bidding at the ceiling"
       );
       plan.fixedFeeUsdc = ceiling;
     }
+    const planCeiling = job.caps?.planningFeeUsdc;
+    if (planCeiling !== undefined && plan.planningFeeUsdc > planCeiling) {
+      plan.planningFeeUsdc = planCeiling;
+    }
 
-    return {
+    await submitPlan(job.jobId, {
       outline: plan.outline,
       planningFeeUsdc: plan.planningFeeUsdc,
       fixedFeeUsdc: plan.fixedFeeUsdc,
-      estTokenUsdcLow: plan.estTokenUsdcLow,
-      estTokenUsdcHigh: plan.estTokenUsdcHigh,
-    };
+    });
+    app.log.info({ jobId: job.jobId }, "plan submitted");
   } catch (e) {
     const err = e as PlatformError;
-    app.log.error({ err }, "planning failed");
-    return reply.code(500).send({ error: err.message });
+    app.log.error({ err, jobId: job.jobId }, "planning failed");
+    // Say so rather than going quiet. Silence means the job sits until
+    // `claim_ttl` expires, the bond is slashed, and the employer learns nothing.
+    await postError(job.jobId, `Planning failed: ${err.message}`).catch(() => {});
   }
-});
+}
 
 /**
  * Do the work. Returns 202 immediately and delivers via callback, because
- * research takes minutes and holding an HTTP connection open for that is a good
- * way to lose the result to a proxy timeout.
+ * research takes minutes and the job deadline — not the HTTP request — is what
+ * bounds it.
  */
 app.post("/execute", async (req, reply) => {
   if (!authenticate(req as never)) return reply.code(401).send({ error: "Bad signature" });
@@ -120,34 +157,32 @@ app.post("/execute", async (req, reply) => {
   const job = jobSchema.parse((req.body as Raw).parsed);
   app.log.info({ jobId: job.jobId }, "executing");
 
-  void (async () => {
-    try {
-      const deck = await research(job.jobId, job.title, job.spec, async (m) => {
-        // Progress is best-effort. A dropped heartbeat must not abort work the
-        // agent has already paid for in tokens.
-        await postProgress(job.jobId, m).catch(() => {});
-      });
-
-      const document = assemble(job.title, deck.markdown, {
-        tier: config.TIER,
-        stub: STUB_MODE,
-        ...deck.usage,
-      });
-
-      await submitDeliverable(job.jobId, document);
-      app.log.info({ jobId: job.jobId, calls: deck.usage.calls }, "delivered");
-    } catch (e) {
-      const err = e as PlatformError;
-      app.log.error({ err, jobId: job.jobId }, "execution failed");
-      // Tell the platform rather than going quiet. Silence here means the job
-      // sits until its deadline and the bond is slashed — the employer learns
-      // nothing and the agent loses more than it needed to.
-      await postError(job.jobId, err.message).catch(() => {});
-    }
-  })();
-
+  void researchAndDeliver(job);
   return reply.code(202).send({ accepted: true });
 });
+
+async function researchAndDeliver(job: Job) {
+  try {
+    const deck = await research(job.jobId, job.title, job.spec, async (m) => {
+      // Progress is best-effort. A dropped heartbeat must not abort work the
+      // agent has already paid for in tokens.
+      await postProgress(job.jobId, m).catch(() => {});
+    });
+
+    const document = assemble(job.title, deck.markdown, {
+      tier: config.TIER,
+      stub: STUB_MODE,
+      ...deck.usage,
+    });
+
+    await submitDeliverable(job.jobId, document);
+    app.log.info({ jobId: job.jobId, calls: deck.usage.calls }, "delivered");
+  } catch (e) {
+    const err = e as PlatformError;
+    app.log.error({ err, jobId: job.jobId }, "execution failed");
+    await postError(job.jobId, err.message).catch(() => {});
+  }
+}
 
 app.post("/cancel", async (req, reply) => {
   if (!authenticate(req as never)) return reply.code(401).send({ error: "Bad signature" });

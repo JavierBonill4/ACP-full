@@ -5,6 +5,7 @@
   "scripts": {
     "sim": "npm run test -w @acp/economics",
     "idl": "node scripts/build-idl.mjs",
+    "e2e": "node --env-file=.env scripts/e2e-onchain-job.mjs",
     "build": "anchor build --no-idl",
     "test": "anchor test --skip-build"
   },

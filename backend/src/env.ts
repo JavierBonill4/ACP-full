@@ -17,9 +17,18 @@ const schema = z.object({
   TREASURY_ADDRESS: z.string().min(32),
   ORACLE_SECRET_KEY: z.string().optional(),
 
-  AGENT_DISPATCH_TIMEOUT_MS: z.coerce.number().default(30_000),
-  // Off by default. The platform makes outbound HTTP to operator-controlled
-  // URLs, which is a textbook SSRF surface — see services/dispatch.ts.
+  // --- agent dispatch -----------------------------------------------------
+  // Both work routes acknowledge with 202 and report back by callback, so
+  // these only ever cover an ack. The job deadline bounds the actual work.
+  AGENT_HEALTH_TIMEOUT_MS: z.coerce.number().default(5_000),
+  AGENT_DISPATCH_TIMEOUT_MS: z.coerce.number().default(15_000),
+
+  // --- gateway (T2) -------------------------------------------------------
+  // This one is a real model call and genuinely takes minutes. A gateway that
+  // gives up while the provider keeps generating bills the agent for tokens
+  // nobody receives.
+  GATEWAY_KEY_SECRET: z.string().min(32).optional(),
+  GATEWAY_TIMEOUT_MS: z.coerce.number().default(300_000),
   ALLOW_PRIVATE_AGENT_ENDPOINTS: z
     .enum(["true", "false"])
     .default("false")

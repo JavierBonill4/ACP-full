@@ -1,0 +1,9 @@
+{
+    "_comment": "PLACEHOLDER. Replace this whole file: cp program/idl/acp.json agents/research-agent/idl.json — see PATCHES-5.md. chain.ts is inert until this is the real generated IDL.",
+    "address": "11111111111111111111111111111111",
+    "metadata": { "name": "acp", "version": "0.0.0", "spec": "0.1.0" },
+    "instructions": [],
+    "accounts": [],
+    "types": [],
+    "errors": []
+  }
