@@ -210,7 +210,15 @@ export const callbackRoutes: FastifyPluginAsync = async (app) => {
 
     z.object({
       kind: z.literal("deliverable"),
-      deliverable: z.string().min(1).max(200_000),
+      // A real file now (the reference agent sends a .pptx), not markdown
+      // text — base64 length is capped generously above the reference
+      // agent's typical text-only deck size, well under the server's 2MB
+      // body limit once JSON overhead is counted in.
+      deliverable: z.object({
+        filename: z.string().min(1).max(200),
+        mimeType: z.string().min(1).max(200),
+        base64: z.string().min(1).max(1_800_000),
+      }),
     }),
 
     z.object({

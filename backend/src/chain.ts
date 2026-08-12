@@ -72,6 +72,17 @@ export function commitmentHash(text: string): string {
   return createHash("sha256").update(normalized, "utf8").digest("hex");
 }
 
+/**
+ * Same idea as commitmentHash, for binary deliverables (a .pptx, not text) —
+ * no line-ending normalisation or trimming, since those aren't meaningful
+ * operations on arbitrary bytes and would desync this hash from what the
+ * agent actually committed on-chain (chain.ts on the agent side hashes the
+ * raw decoded file bytes directly).
+ */
+export function commitmentHashBytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 export function hashToBytes(hex: string): number[] {
   return Array.from(Buffer.from(hex, "hex"));
 }

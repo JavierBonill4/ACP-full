@@ -148,7 +148,11 @@ export const submitPlanSchema = z.object({
 });
 
 export const submitDeliverableSchema = z.object({
-  deliverable: z.string().min(1).max(200_000),
+  deliverable: z.object({
+    filename: z.string().min(1).max(200),
+    mimeType: z.string().min(1).max(200),
+    base64: z.string().min(1).max(1_800_000),
+  }),
 });
 
 export const rateSchema = z.object({

@@ -16,7 +16,7 @@ import {
 import type { Agent, Job } from "@prisma/client";
 
 import { prisma } from "../db.js";
-import { commitmentHash, jobPda } from "../chain.js";
+import { commitmentHash, commitmentHashBytes, jobPda } from "../chain.js";
 import { PublicKey } from "@solana/web3.js";
 import { dispatch } from "./dispatch.js";
 import type {
@@ -397,23 +397,48 @@ export async function acceptPlan(
   return updated;
 }
 
-export async function submitDeliverable(agentWallet: string, jobId: string, deliverable: string) {
+export interface DeliverableFileInput {
+  filename: string;
+  mimeType: string;
+  /** Base64-encoded file bytes. Hashed as bytes, not as this string. */
+  base64: string;
+}
+
+/**
+ * The deliverable is a real file (a .pptx, from the reference research
+ * agent) rather than plain text — `deliverableHash` commits to the decoded
+ * file bytes, matching what the agent hashed before calling
+ * submit_deliverable on-chain (see agents/research-agent/src/platform.ts).
+ * Hashing the base64 *string* instead would still be a valid commitment in
+ * isolation, but it would not be the same hash the agent put on-chain, and
+ * this row would then fail to verify against it.
+ */
+export async function submitDeliverable(agentWallet: string, jobId: string, deliverable: DeliverableFileInput) {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new JobError("No such job", 404);
   if (job.agentAddress !== agentWallet) throw new JobError("Not your job", 403);
   if (job.state !== "IN_PROGRESS") throw new JobError("A deliverable is not expected right now");
   if (job.deadline < new Date()) throw new JobError("The deadline has passed");
 
+  const fileBytes = Buffer.from(deliverable.base64, "base64");
+
   const updated = await prisma.job.update({
     where: { id: jobId },
     data: {
       state: "REVIEW_PENDING",
-      deliverableText: deliverable,
-      deliverableHash: commitmentHash(deliverable),
+      deliverableBase64: deliverable.base64,
+      deliverableMimeType: deliverable.mimeType,
+      deliverableFilename: deliverable.filename,
+      deliverableHash: commitmentHashBytes(fileBytes),
       reviewExpiresAt: new Date(Date.now() + secs(REVIEW_TTL)),
     },
   });
-  await event(jobId, "DELIVERABLE_SUBMITTED", agentWallet, "Deliverable submitted for review");
+  await event(
+    jobId,
+    "DELIVERABLE_SUBMITTED",
+    agentWallet,
+    `Deliverable submitted for review (${deliverable.filename}, ${fileBytes.length.toLocaleString()} bytes)`
+  );
   return updated;
 }
 

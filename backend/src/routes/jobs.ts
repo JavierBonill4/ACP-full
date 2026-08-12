@@ -80,8 +80,12 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
     });
 
     // Spec text is not returned in list views. It is the employer's, it can be
-    // long, and the browse feed does not need it.
-    return serialize(jobs.map(({ specText, planText, deliverableText, ...rest }) => rest));
+    // long, and the browse feed does not need it. deliverableBase64 never
+    // belongs in a list payload regardless of view — it's fetched by itself
+    // from GET /:id/deliverable when actually needed.
+    return serialize(
+      jobs.map(({ specText, planText, deliverableText, deliverableBase64, ...rest }) => rest)
+    );
   });
 
   app.get("/:id", { preHandler: optionalAuth }, async (req, reply) => {
@@ -100,16 +104,64 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
 
     const me = req.session?.address;
     const isParty = me === job.employerAddress || me === job.agentAddress;
+    const canSeeDeliverable = isParty || job.state === "SETTLED";
+
+    const { deliverableBase64, ...jobWithoutBlob } = job;
 
     return serialize({
-      ...job,
+      ...jobWithoutBlob,
       // The deliverable is the thing being paid for. Withholding it from
       // passers-by until settlement is the point of the commit-then-reveal
       // shape; the hash is public throughout so nothing can be swapped.
-      deliverableText: isParty || job.state === "SETTLED" ? job.deliverableText : null,
+      // The file itself (deliverableBase64) is never inlined into this
+      // payload even for a party who can see it — GET /:id/deliverable
+      // serves it separately so this response stays a reasonable size.
+      deliverableText: canSeeDeliverable ? job.deliverableText : null,
+      deliverableFilename: canSeeDeliverable ? job.deliverableFilename : null,
+      deliverableMimeType: canSeeDeliverable ? job.deliverableMimeType : null,
       specText: isParty || job.jobType === "OPEN" ? job.specText : null,
       viewerRole: me === job.employerAddress ? "employer" : me === job.agentAddress ? "agent" : "observer",
     });
+  });
+
+  /**
+   * Serves the actual deliverable file. Split out from GET /:id so that
+   * route's payload doesn't carry a base64 blob every time a job is loaded —
+   * this is fetched only when someone actually wants to open/download it.
+   *
+   * Same visibility rule as deliverableText on GET /:id: employer, agent, or
+   * anyone once the job has SETTLED.
+   */
+  app.get("/:id/deliverable", { preHandler: optionalAuth }, async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const job = await prisma.job.findUnique({
+      where: { id },
+      select: {
+        employerAddress: true,
+        agentAddress: true,
+        state: true,
+        deliverableBase64: true,
+        deliverableMimeType: true,
+        deliverableFilename: true,
+      },
+    });
+    if (!job) return reply.code(404).send({ error: "No such job" });
+
+    const me = req.session?.address;
+    const isParty = me === job.employerAddress || me === job.agentAddress;
+    if (!isParty && job.state !== "SETTLED") {
+      return reply.code(403).send({ error: "Not visible until the job settles" });
+    }
+    if (!job.deliverableBase64) return reply.code(404).send({ error: "No deliverable yet" });
+
+    const bytes = Buffer.from(job.deliverableBase64, "base64");
+    return reply
+      .header("content-type", job.deliverableMimeType ?? "application/octet-stream")
+      .header(
+        "content-disposition",
+        `attachment; filename="${(job.deliverableFilename ?? "deliverable").replace(/"/g, "")}"`
+      )
+      .send(bytes);
   });
 
   // --- creation ------------------------------------------------------------

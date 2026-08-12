@@ -199,8 +199,21 @@ model Job {
   specHash        String
   planText        String?
   planHash        String?
+  /// Legacy text deliverable path (markdown deck), superseded by the
+  /// deliverableBase64/MimeType/Filename trio below for real files (.pptx).
+  /// Left in place for jobs settled before that change and for anything
+  /// that still wants a plain-text preview.
   deliverableText String?
-  deliverableHash String?
+  /// sha256 hex of the delivered file's raw bytes (or of deliverableText,
+  /// for the legacy text path) — must match what the agent committed
+  /// on-chain in submit_deliverable.
+  deliverableHash     String?
+  /// The actual deliverable file, base64-encoded. SQLite TEXT has no
+  /// practical size limit for a lightweight text-based deck; this is not
+  /// where you'd want to store something with embedded images at scale.
+  deliverableBase64   String?
+  deliverableMimeType String?
+  deliverableFilename String?
 
   // --- economics, base units, mirroring the on-chain Job ---
   planningFeeCap   BigInt
