@@ -5,12 +5,14 @@ import { OUTCOME } from "@acp/economics";
 import { optionalAuth, requireAuth } from "../auth.js";
 import { prisma, serialize } from "../db.js";
 import { explorerTx } from "../chain.js";
+import { assertTxSucceeded } from "../services/chainVerify.js";
 import {
   acceptOffer,
   acceptPlan,
   claimJob,
   createCustomJob,
   createDirectJob,
+  dispatchDirectOffer,
   finalizeJob,
   quote,
   submitDeliverable,
@@ -130,6 +132,12 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
    * The employer signs `post_job` in the browser; this records the confirmed
    * signature. Until it lands the row exists but no money has moved, which is
    * why `state` is not advanced anywhere except here for creation.
+   *
+   * Verified against `job.pda` (computed off-chain at creation, before this
+   * transaction ever existed — see createCustomJob/createDirectJob) before
+   * being trusted: without that check, any successful signature this wallet
+   * ever produced would satisfy this route, not just the one that actually
+   * funded this job's escrow.
    */
   app.post("/:id/confirm", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
@@ -139,9 +147,19 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
     if (job.employerAddress !== req.session!.address) {
       return reply.code(403).send({ error: "Not your job" });
     }
+
+    await assertTxSucceeded(signature, job.pda ?? undefined);
+
     await prisma.jobEvent.create({
       data: { jobId: id, kind: "ESCROW_FUNDED", actor: req.session!.address, txSig: signature },
     });
+
+    // Only now is the on-chain job account guaranteed to exist — safe to
+    // tell a directly-hired agent about it. See dispatchDirectOffer's
+    // comment in services/jobs.ts for why this can't happen at job-creation
+    // time instead.
+    void dispatchDirectOffer(id);
+
     return { ok: true, explorer: explorerTx(signature) };
   });
 
@@ -171,61 +189,102 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // --- employer side -------------------------------------------------------
+  //
+  // Every route below now requires the SAME `signature` field `/confirm`
+  // does: the employer signs the matching on-chain instruction
+  // (accept_plan / reject_plan / accept_deliverable / reject_deliverable /
+  // cancel_job — see frontend/lib/transactions.ts) in the browser first,
+  // THEN calls here with the confirmed signature. `assertTxSucceeded`
+  // verifies it actually happened and actually touched this job's `pda`
+  // before any DB state changes or reputation is written — without that,
+  // these routes would trust whatever the client claims, which is exactly
+  // the gap PATCHES-5.md step 5 exists to close.
 
-  app.post("/:id/accept-plan", { preHandler: requireAuth }, async (req) => {
+  app.post("/:id/accept-plan", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    return serialize(await acceptPlan(req.session!.address, id));
-  });
-
-  app.post("/:id/reject-plan", { preHandler: requireAuth }, async (req, reply) => {
-    const { id } = idParam.parse(req.params);
+    const { signature } = confirmTxSchema.parse(req.body);
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return reply.code(404).send({ error: "No such job" });
     if (job.employerAddress !== req.session!.address) {
       return reply.code(403).send({ error: "Not your job" });
     }
+
+    await assertTxSucceeded(signature, job.pda ?? undefined);
+
+    return serialize(await acceptPlan(req.session!.address, id, false, signature));
+  });
+
+  app.post("/:id/reject-plan", { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const { signature } = confirmTxSchema.parse(req.body);
+    const job = await prisma.job.findUnique({ where: { id } });
+    if (!job) return reply.code(404).send({ error: "No such job" });
+    if (job.employerAddress !== req.session!.address) {
+      return reply.code(403).send({ error: "Not your job" });
+    }
+
+    await assertTxSucceeded(signature, job.pda ?? undefined);
+
     return serialize(
-      await finalizeJob(id, { outcome: OUTCOME.PLAN_REJECTED, actor: req.session!.address })
+      await finalizeJob(id, {
+        outcome: OUTCOME.PLAN_REJECTED,
+        actor: req.session!.address,
+        txSig: signature,
+      })
     );
   });
 
   app.post("/:id/accept", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const { rating, comment } = rateSchema.parse(req.body);
+    const { signature } = confirmTxSchema.parse(req.body);
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return reply.code(404).send({ error: "No such job" });
     if (job.employerAddress !== req.session!.address) {
       return reply.code(403).send({ error: "Not your job" });
     }
+
+    // This is the payout transaction — the strongest reason of any route
+    // here to confirm the signature actually references this job's pda
+    // before reputation and settlement get written off it.
+    await assertTxSucceeded(signature, job.pda ?? undefined);
+
     return serialize(
       await finalizeJob(id, {
         outcome: OUTCOME.ACCEPTED,
         rating,
         comment,
         actor: req.session!.address,
+        txSig: signature,
       })
     );
   });
 
   app.post("/:id/reject", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
+    const { signature } = confirmTxSchema.parse(req.body);
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return reply.code(404).send({ error: "No such job" });
     if (job.employerAddress !== req.session!.address) {
       return reply.code(403).send({ error: "Not your job" });
     }
+
+    await assertTxSucceeded(signature, job.pda ?? undefined);
+
     // Rejected work is not licensed. The employer receives no rights to it —
     // this has to be in the ToS and in the rejection UI, not just here.
     return serialize(
       await finalizeJob(id, {
         outcome: OUTCOME.DELIVERABLE_REJECTED,
         actor: req.session!.address,
+        txSig: signature,
       })
     );
   });
 
   app.post("/:id/cancel", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
+    const { signature } = confirmTxSchema.parse(req.body);
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return reply.code(404).send({ error: "No such job" });
     if (job.employerAddress !== req.session!.address) {
@@ -234,8 +293,15 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
     if (!["OPEN", "OFFERED"].includes(job.state)) {
       return reply.code(400).send({ error: "A claimed job cannot be cancelled" });
     }
+
+    await assertTxSucceeded(signature, job.pda ?? undefined);
+
     return serialize(
-      await finalizeJob(id, { outcome: OUTCOME.EXPIRED, actor: req.session!.address })
+      await finalizeJob(id, {
+        outcome: OUTCOME.EXPIRED,
+        actor: req.session!.address,
+        txSig: signature,
+      })
     );
   });
 };

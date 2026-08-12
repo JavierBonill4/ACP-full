@@ -120,6 +120,13 @@ async function nextNonce(employerAddress: string): Promise<number> {
 /**
  * The general window's action: a custom job, posted OPEN, claimed by whichever
  * general-purpose agent wants it. No agent is named at creation.
+ *
+ * `nonce`/`pda` are computed here, off-chain, BEFORE any on-chain transaction
+ * exists — they're a deterministic function of (employerAddress, nonce), so
+ * this is safe to precompute. The frontend must use this exact nonce (not
+ * derive its own) when it later signs `post_job`, or the resulting on-chain
+ * job account won't match the `pda` already stored on this row. See the
+ * `/:id/confirm` route, which is what records that the transaction happened.
  */
 export async function createCustomJob(
   employerAddress: string,
@@ -164,6 +171,8 @@ export async function createCustomJob(
  * The single-purpose window's action: hire one named agent. Fees default to
  * the agent's descriptor and are pinned into the job, so the ceilings the
  * employer funds are the numbers the agent advertised.
+ *
+ * Same nonce/pda precomputation note as createCustomJob above.
  */
 export async function createDirectJob(
   employerAddress: string,
@@ -224,8 +233,31 @@ export async function createDirectJob(
   });
 
   await event(job.id, "OFFERED", employerAddress, `Offered directly to ${agent.name}`);
-  void notifyAgent(agent, job, "plan");
+  // NOT dispatched here. The escrow-funding `post_job` transaction hasn't
+  // been signed yet at this point — this DB row exists but the on-chain job
+  // account doesn't. See dispatchDirectOffer below, called from
+  // routes/jobs.ts's /:id/confirm once that transaction is confirmed.
   return job;
+}
+
+/**
+ * Notifies the hired agent that it has an offer — called from
+ * routes/jobs.ts's /:id/confirm, AFTER the employer's post_job transaction
+ * is confirmed on-chain, not from createDirectJob at DB-creation time.
+ *
+ * Dispatching at creation time raced the on-chain job account's creation:
+ * the agent would receive the offer and immediately try `accept_offer`
+ * on-chain (see agents/research-agent/src/chain.ts), which requires the job
+ * account to already exist — while the employer's browser was often still
+ * waiting on a wallet approval, or the transaction hadn't landed yet. That
+ * produced Anchor's AccountNotInitialized (error 3012) on accept_offer, not
+ * a bug in the agent, but a real ordering gap this closes.
+ */
+export async function dispatchDirectOffer(jobId: string) {
+  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!job || job.jobType !== "DIRECT" || !job.agentId || job.state !== "OFFERED") return;
+  const agent = await prisma.agent.findUnique({ where: { id: job.agentId } });
+  if (agent) void notifyAgent(agent, job, "plan");
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +365,18 @@ export async function submitPlan(
   return updated;
 }
 
-export async function acceptPlan(employerAddress: string, jobId: string, auto = false) {
+/**
+ * `txSig` is the confirmed `accept_plan` transaction the employer just sent
+ * from the browser (verified by the caller — see routes/jobs.ts — before
+ * this runs). Recorded on the same JobEvent as the business-state change
+ * rather than a separate event, so the timeline shows one row, not two.
+ */
+export async function acceptPlan(
+  employerAddress: string,
+  jobId: string,
+  auto = false,
+  txSig?: string
+) {
   const job = await requireEmployerJob(employerAddress, jobId, auto);
   if (job.state !== "PLAN_PENDING") throw new JobError("There is no plan awaiting review");
 
@@ -341,8 +384,13 @@ export async function acceptPlan(employerAddress: string, jobId: string, auto = 
     where: { id: jobId },
     data: { state: "IN_PROGRESS", reviewExpiresAt: null, autoAccepted: auto },
   });
-  await event(jobId, "PLAN_ACCEPTED", auto ? null : employerAddress,
-    auto ? "Review window expired; plan auto-accepted" : "Employer accepted the plan");
+  await event(
+    jobId,
+    "PLAN_ACCEPTED",
+    auto ? null : employerAddress,
+    auto ? "Review window expired; plan auto-accepted" : "Employer accepted the plan",
+    txSig
+  );
 
   const agent = job.agentId ? await prisma.agent.findUnique({ where: { id: job.agentId } }) : null;
   if (agent) void notifyAgent(agent, updated, "execute");
@@ -379,6 +427,10 @@ export interface FinalizeOptions {
   comment?: string;
   auto?: boolean;
   actor?: string;
+  /** Confirmed on-chain settlement transaction, when this outcome was
+   *  triggered by a wallet-signed action (accept/reject/cancel) rather than
+   *  the permissionless crank. Verified by the caller before this runs. */
+  txSig?: string;
 }
 
 /**
@@ -457,7 +509,8 @@ export async function finalizeJob(jobId: string, opts: FinalizeOptions) {
     jobId,
     opts.outcome === OUTCOME.EXPIRED ? "EXPIRED" : "SETTLED",
     opts.actor ?? null,
-    describeOutcome(opts.outcome, opts.auto ?? false)
+    describeOutcome(opts.outcome, opts.auto ?? false),
+    opts.txSig
   );
 
   if (job.agentId) {
@@ -533,14 +586,21 @@ async function requireEmployerJob(employerAddress: string, jobId: string, allowA
   return job;
 }
 
+/**
+ * `txSig` is optional and threaded through from routes that verified a
+ * wallet-signed transaction before calling in (accept-plan, accept, reject,
+ * cancel — see routes/jobs.ts). Purely off-chain events (POSTED, CLAIMED,
+ * DISPATCH_FAILED, ...) simply omit it.
+ */
 export async function event(
   jobId: string,
   kind: string,
   actor?: string | null,
-  detail?: string | null
+  detail?: string | null,
+  txSig?: string | null
 ) {
   await prisma.jobEvent.create({
-    data: { jobId, kind, actor: actor ?? null, detail: detail ?? null },
+    data: { jobId, kind, actor: actor ?? null, detail: detail ?? null, txSig: txSig ?? null },
   });
 }
 
@@ -555,7 +615,7 @@ async function notifyAgent(agent: Agent, job: Job, route: "plan" | "execute" | "
     jobId: job.id,
     pda: job.pda,
     title: job.title,
-    state: job.state,          // <- add
+    state: job.state,
     jobType: job.jobType,
     spec: job.specText,
     specHash: job.specHash,

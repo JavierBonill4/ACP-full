@@ -235,6 +235,9 @@ model Job {
   ratings      Rating[]
   events       JobEvent[]
 
+  postTxSig   String?   // signature of the post_job transaction
+  settleTxSig String?   // signature of whichever Finalize call settled the job
+
   @@index([state, jobType])
   @@index([employerAddress])
   @@index([agentId])
