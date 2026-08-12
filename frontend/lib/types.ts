@@ -86,6 +86,13 @@ export type JobState =
 export interface JobSummary {
   id: string;
   pda: string | null;
+  /**
+   * Assigned off-chain at creation time (services/jobs.ts's nextNonce()),
+   * before any on-chain transaction exists — see transactions.ts's postJob.
+   * This is the value that must be signed on-chain, not one re-derived from
+   * EmployerProfile.nextNonce, since the two can drift.
+   */
+  nonce: number;
   title: string;
   state: JobState;
   jobType: "OPEN" | "DIRECT";

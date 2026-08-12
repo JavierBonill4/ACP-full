@@ -1,9 +1,1845 @@
 {
-    "_comment": "PLACEHOLDER. Replace this whole file: cp program/idl/acp.json frontend/lib/idl.json — see PATCHES-5.md. Everything in lib/anchor.ts, pdas.ts, and transactions.ts is inert until this is the real generated IDL.",
-    "address": "11111111111111111111111111111111",
-    "metadata": { "name": "acp", "version": "0.0.0", "spec": "0.1.0" },
-    "instructions": [],
-    "accounts": [],
-    "types": [],
-    "errors": []
-  }
+  "address": "FDBD4h5mZsYG8myfEE7NFFtmhuWqt5MJNHvgyfW57eYK",
+  "metadata": {
+    "name": "acp",
+    "version": "0.4.0",
+    "spec": "0.1.0",
+    "description": "Agentic Commerce Protocol v4"
+  },
+  "instructions": [
+    {
+      "name": "initialize_oracle",
+      "discriminator": [
+        144,
+        223,
+        131,
+        120,
+        196,
+        253,
+        181,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "oracle_config",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "treasury"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "protocol_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "max_enabled_tier",
+          "type": "u8"
+        },
+        {
+          "name": "threshold",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle_params",
+      "discriminator": [
+        32,
+        185,
+        197,
+        232,
+        107,
+        1,
+        38,
+        87
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "oracle_config",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "protocol_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "max_enabled_tier",
+          "type": "u8"
+        },
+        {
+          "name": "rate_card_version",
+          "type": "u32"
+        },
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "add_oracle_signer",
+      "discriminator": [
+        66,
+        217,
+        139,
+        89,
+        215,
+        220,
+        193,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "oracle_config",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "signer",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "remove_oracle_signer",
+      "discriminator": [
+        103,
+        205,
+        177,
+        215,
+        115,
+        60,
+        121,
+        113
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "oracle_config",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "signer",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "register_wallet",
+      "discriminator": [
+        181,
+        141,
+        102,
+        82,
+        135,
+        213,
+        141,
+        8
+      ],
+      "accounts": [
+        {
+          "name": "wallet",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "tier",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "register_employer",
+      "discriminator": [
+        154,
+        33,
+        113,
+        170,
+        63,
+        118,
+        124,
+        26
+      ],
+      "accounts": [
+        {
+          "name": "employer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "post_job",
+      "discriminator": [
+        34,
+        208,
+        58,
+        248,
+        129,
+        234,
+        179,
+        211
+      ],
+      "accounts": [
+        {
+          "name": "employer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "PostJobArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept_offer",
+      "discriminator": [
+        227,
+        82,
+        234,
+        131,
+        1,
+        18,
+        48,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "agent",
+          "signer": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_job",
+      "discriminator": [
+        9,
+        160,
+        5,
+        231,
+        116,
+        123,
+        198,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "agent",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "submit_plan",
+      "discriminator": [
+        136,
+        185,
+        140,
+        2,
+        95,
+        178,
+        77,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "agent",
+          "signer": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "plan_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "planning_fee",
+          "type": "u64"
+        },
+        {
+          "name": "fixed_fee",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "report_usage",
+      "discriminator": [
+        65,
+        82,
+        222,
+        97,
+        7,
+        67,
+        132,
+        82
+      ],
+      "accounts": [
+        {
+          "name": "oracle_signer",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "phase",
+          "type": "u8"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "accept_plan",
+      "discriminator": [
+        54,
+        69,
+        214,
+        148,
+        255,
+        163,
+        102,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "employer",
+          "signer": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "auto_accept_plan",
+      "discriminator": [
+        235,
+        144,
+        181,
+        171,
+        169,
+        124,
+        94,
+        156
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "submit_deliverable",
+      "discriminator": [
+        38,
+        137,
+        64,
+        44,
+        237,
+        11,
+        125,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "agent",
+          "signer": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "deliverable_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "usage_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject_plan",
+      "discriminator": [
+        199,
+        218,
+        187,
+        120,
+        241,
+        219,
+        27,
+        84
+      ],
+      "accounts": [
+        {
+          "name": "actor",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "accept_deliverable",
+      "discriminator": [
+        225,
+        151,
+        217,
+        255,
+        133,
+        179,
+        243,
+        38
+      ],
+      "accounts": [
+        {
+          "name": "actor",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "rating",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "reject_deliverable",
+      "discriminator": [
+        79,
+        39,
+        42,
+        174,
+        74,
+        211,
+        205,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "actor",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "auto_accept",
+      "discriminator": [
+        41,
+        127,
+        245,
+        148,
+        80,
+        208,
+        24,
+        4
+      ],
+      "accounts": [
+        {
+          "name": "actor",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "expire_job",
+      "discriminator": [
+        127,
+        5,
+        119,
+        250,
+        214,
+        255,
+        102,
+        168
+      ],
+      "accounts": [
+        {
+          "name": "actor",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_job",
+      "discriminator": [
+        126,
+        241,
+        155,
+        241,
+        50,
+        236,
+        83,
+        118
+      ],
+      "accounts": [
+        {
+          "name": "actor",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "bond_vault",
+          "writable": true
+        },
+        {
+          "name": "employer_profile",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "treasury_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "release_holdback",
+      "discriminator": [
+        202,
+        172,
+        106,
+        197,
+        19,
+        222,
+        161,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "signer": true
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "agent_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claw_back_holdback",
+      "discriminator": [
+        241,
+        85,
+        86,
+        8,
+        176,
+        57,
+        100,
+        120
+      ],
+      "accounts": [
+        {
+          "name": "oracle_signer",
+          "signer": true
+        },
+        {
+          "name": "oracle_config"
+        },
+        {
+          "name": "job",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "wallet_profile",
+          "writable": true
+        },
+        {
+          "name": "employer_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "OracleConfig",
+      "discriminator": [
+        133,
+        196,
+        152,
+        50,
+        27,
+        21,
+        145,
+        254
+      ]
+    },
+    {
+      "name": "WalletProfile",
+      "discriminator": [
+        9,
+        216,
+        26,
+        246,
+        37,
+        66,
+        29,
+        169
+      ]
+    },
+    {
+      "name": "EmployerProfile",
+      "discriminator": [
+        252,
+        223,
+        159,
+        195,
+        108,
+        81,
+        142,
+        255
+      ]
+    },
+    {
+      "name": "Job",
+      "discriminator": [
+        75,
+        124,
+        80,
+        203,
+        161,
+        180,
+        202,
+        80
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "JobPosted",
+      "discriminator": [
+        18,
+        171,
+        12,
+        141,
+        212,
+        169,
+        183,
+        52
+      ]
+    },
+    {
+      "name": "JobClaimed",
+      "discriminator": [
+        176,
+        110,
+        104,
+        38,
+        27,
+        220,
+        61,
+        191
+      ]
+    },
+    {
+      "name": "PlanSubmitted",
+      "discriminator": [
+        163,
+        169,
+        102,
+        107,
+        79,
+        81,
+        251,
+        18
+      ]
+    },
+    {
+      "name": "PlanAccepted",
+      "discriminator": [
+        236,
+        18,
+        104,
+        77,
+        234,
+        41,
+        215,
+        251
+      ]
+    },
+    {
+      "name": "DeliverableSubmitted",
+      "discriminator": [
+        128,
+        198,
+        110,
+        44,
+        67,
+        73,
+        255,
+        99
+      ]
+    },
+    {
+      "name": "UsageReported",
+      "discriminator": [
+        126,
+        184,
+        245,
+        114,
+        242,
+        54,
+        14,
+        99
+      ]
+    },
+    {
+      "name": "JobSettled",
+      "discriminator": [
+        130,
+        105,
+        205,
+        34,
+        87,
+        86,
+        152,
+        27
+      ]
+    },
+    {
+      "name": "HoldbackReleased",
+      "discriminator": [
+        252,
+        242,
+        159,
+        138,
+        36,
+        150,
+        69,
+        241
+      ]
+    },
+    {
+      "name": "HoldbackClawedBack",
+      "discriminator": [
+        65,
+        88,
+        178,
+        157,
+        178,
+        142,
+        54,
+        83
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Paused",
+      "msg": "Protocol is paused"
+    },
+    {
+      "code": 6001,
+      "name": "NotAdmin",
+      "msg": "Signer is not the oracle admin"
+    },
+    {
+      "code": 6002,
+      "name": "NotOracleSigner",
+      "msg": "Signer is not a whitelisted oracle signer"
+    },
+    {
+      "code": 6003,
+      "name": "SignerListFull",
+      "msg": "Oracle signer list is full"
+    },
+    {
+      "code": 6004,
+      "name": "FeeTooHigh",
+      "msg": "Protocol fee exceeds the maximum"
+    },
+    {
+      "code": 6005,
+      "name": "BadState",
+      "msg": "Job is not in a state that allows this action"
+    },
+    {
+      "code": 6006,
+      "name": "NotEmployer",
+      "msg": "Caller is not the employer for this job"
+    },
+    {
+      "code": 6007,
+      "name": "NotAgent",
+      "msg": "Caller is not the agent for this job"
+    },
+    {
+      "code": 6008,
+      "name": "WrongAgent",
+      "msg": "This job was offered to a different agent"
+    },
+    {
+      "code": 6009,
+      "name": "TierTooLow",
+      "msg": "Agent tier is below the job's minimum tier"
+    },
+    {
+      "code": 6010,
+      "name": "TierNotEnabled",
+      "msg": "Tier is not enabled in this deployment"
+    },
+    {
+      "code": 6011,
+      "name": "ValueCapExceeded",
+      "msg": "Job value exceeds this tier's cap"
+    },
+    {
+      "code": 6012,
+      "name": "ClaimLimitReached",
+      "msg": "Wallet has reached its concurrent claim limit"
+    },
+    {
+      "code": 6013,
+      "name": "BadDeadline",
+      "msg": "Deadline is in the past or beyond the maximum horizon"
+    },
+    {
+      "code": 6014,
+      "name": "NotExpired",
+      "msg": "Timer has not expired yet"
+    },
+    {
+      "code": 6015,
+      "name": "AlreadyExpired",
+      "msg": "Timer has already expired"
+    },
+    {
+      "code": 6016,
+      "name": "HoldbackPending",
+      "msg": "Holdback window has not closed"
+    },
+    {
+      "code": 6017,
+      "name": "NoHoldback",
+      "msg": "There is no holdback on this job"
+    },
+    {
+      "code": 6018,
+      "name": "FeeCapExceeded",
+      "msg": "Proposed fee exceeds the employer's funded ceiling"
+    },
+    {
+      "code": 6019,
+      "name": "UsageCapExceeded",
+      "msg": "Reported usage exceeds the phase cap"
+    },
+    {
+      "code": 6020,
+      "name": "BadRating",
+      "msg": "Rating must be between 0 and 10"
+    },
+    {
+      "code": 6021,
+      "name": "ZeroEscrow",
+      "msg": "Escrow amounts must be non-zero"
+    },
+    {
+      "code": 6022,
+      "name": "WrongMint",
+      "msg": "Token account mint does not match the configured USDC mint"
+    },
+    {
+      "code": 6023,
+      "name": "WrongTokenOwner",
+      "msg": "Token account owner does not match the expected party"
+    },
+    {
+      "code": 6024,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    }
+  ],
+  "types": [
+    {
+      "name": "OracleConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "signers",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "threshold",
+            "type": "u8"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "rate_card_version",
+            "type": "u32"
+          },
+          {
+            "name": "max_enabled_tier",
+            "type": "u8"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WalletProfile",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "wrs",
+            "type": "u64"
+          },
+          {
+            "name": "jobs_completed",
+            "type": "u64"
+          },
+          {
+            "name": "jobs_rejected",
+            "type": "u64"
+          },
+          {
+            "name": "jobs_expired",
+            "type": "u64"
+          },
+          {
+            "name": "total_value_settled",
+            "type": "u64"
+          },
+          {
+            "name": "first_seen",
+            "type": "i64"
+          },
+          {
+            "name": "tier",
+            "type": "u8"
+          },
+          {
+            "name": "active_claims",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EmployerProfile",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "employer",
+            "type": "pubkey"
+          },
+          {
+            "name": "jobs_posted",
+            "type": "u64"
+          },
+          {
+            "name": "jobs_rejected",
+            "type": "u64"
+          },
+          {
+            "name": "jobs_auto_accepted",
+            "type": "u64"
+          },
+          {
+            "name": "total_value_escrowed",
+            "type": "u64"
+          },
+          {
+            "name": "first_seen",
+            "type": "i64"
+          },
+          {
+            "name": "next_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Job",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "employer",
+            "type": "pubkey"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "job_type",
+            "type": "u8"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          },
+          {
+            "name": "min_tier",
+            "type": "u8"
+          },
+          {
+            "name": "claimed_tier",
+            "type": "u8"
+          },
+          {
+            "name": "planning_fee_cap",
+            "type": "u64"
+          },
+          {
+            "name": "fixed_fee_cap",
+            "type": "u64"
+          },
+          {
+            "name": "planning_token_cap",
+            "type": "u64"
+          },
+          {
+            "name": "token_budget_cap",
+            "type": "u64"
+          },
+          {
+            "name": "planning_fee",
+            "type": "u64"
+          },
+          {
+            "name": "fixed_fee",
+            "type": "u64"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          },
+          {
+            "name": "planning_tokens_used",
+            "type": "u64"
+          },
+          {
+            "name": "execution_tokens_used",
+            "type": "u64"
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "plan_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "deliverable_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "usage_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "offer_expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "claim_expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "review_expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          },
+          {
+            "name": "holdback_until",
+            "type": "i64"
+          },
+          {
+            "name": "rate_card_version",
+            "type": "u32"
+          },
+          {
+            "name": "rating",
+            "type": "u8"
+          },
+          {
+            "name": "auto_accepted",
+            "type": "bool"
+          },
+          {
+            "name": "holdback_amount",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "bond_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobPosted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "employer",
+            "type": "pubkey"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "job_type",
+            "type": "u8"
+          },
+          {
+            "name": "escrow_total",
+            "type": "u64"
+          },
+          {
+            "name": "min_tier",
+            "type": "u8"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "tier",
+            "type": "u8"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlanSubmitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "planning_fee",
+            "type": "u64"
+          },
+          {
+            "name": "fixed_fee",
+            "type": "u64"
+          },
+          {
+            "name": "review_expires_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlanAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DeliverableSubmitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "review_expires_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UsageReported",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "phase",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "outcome",
+            "type": "u8"
+          },
+          {
+            "name": "agent_immediate",
+            "type": "u64"
+          },
+          {
+            "name": "agent_holdback",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          },
+          {
+            "name": "employer_refund",
+            "type": "u64"
+          },
+          {
+            "name": "bond_slashed",
+            "type": "bool"
+          },
+          {
+            "name": "rating",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "HoldbackReleased",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "HoldbackClawedBack",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PostJobArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "job_type",
+            "type": "u8"
+          },
+          {
+            "name": "agent",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "planning_fee_cap",
+            "type": "u64"
+          },
+          {
+            "name": "fixed_fee_cap",
+            "type": "u64"
+          },
+          {
+            "name": "planning_token_cap",
+            "type": "u64"
+          },
+          {
+            "name": "token_budget_cap",
+            "type": "u64"
+          },
+          {
+            "name": "min_tier",
+            "type": "u8"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ]
+}

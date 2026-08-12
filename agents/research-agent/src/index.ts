@@ -13,6 +13,7 @@ import {
 } from "./platform.js";
 import { buildPlan, research } from "./research.js";
 import { syncRateCard } from "./ratecard.js";
+import { chainEnabled, claimJob as chainClaimJob, registerWalletIfNeeded } from "./chain.js";
 
 /**
  * Reference ACP agent: researches a topic and returns a markdown deck.
@@ -63,6 +64,10 @@ const jobSchema = z.object({
   /** OPEN | OFFERED | CLAIMED | ... — decides whether the offer needs taking first. */
   state: z.string().default("CLAIMED"),
   jobType: z.enum(["OPEN", "DIRECT"]).default("OPEN"),
+  /** On-chain job address, base58. Absent for jobs posted before the
+   *  platform's on-chain wiring wrote this through — chain calls are simply
+   *  skipped for those, same as when this agent has no keypair configured. */
+  pda: z.string().optional(),
   deadline: z.string().optional(),
   caps: z
     .object({
@@ -109,8 +114,14 @@ app.post("/plan", async (req, reply) => {
 async function planAndSubmit(job: Job) {
   try {
     if (job.state === "OFFERED") {
-      await acceptOffer(job.jobId);
+      await acceptOffer(job.jobId, job.pda);
       app.log.info({ jobId: job.jobId }, "offer accepted");
+    } else if (job.jobType === "OPEN" && job.pda && chainEnabled) {
+      // Open-marketplace path — claim_job instead of accept_offer. Not
+      // exercised by the e2e script; if this throws, it's the first place
+      // to check the on-chain ClaimJob accounts against chain.ts.
+      await chainClaimJob(job.pda);
+      app.log.info({ jobId: job.jobId }, "job claimed on-chain");
     }
 
     const plan = await buildPlan(job.jobId, job.title, job.spec);
@@ -131,11 +142,15 @@ async function planAndSubmit(job: Job) {
       plan.planningFeeUsdc = planCeiling;
     }
 
-    await submitPlan(job.jobId, {
-      outline: plan.outline,
-      planningFeeUsdc: plan.planningFeeUsdc,
-      fixedFeeUsdc: plan.fixedFeeUsdc,
-    });
+    await submitPlan(
+      job.jobId,
+      {
+        outline: plan.outline,
+        planningFeeUsdc: plan.planningFeeUsdc,
+        fixedFeeUsdc: plan.fixedFeeUsdc,
+      },
+      job.pda
+    );
     app.log.info({ jobId: job.jobId }, "plan submitted");
   } catch (e) {
     const err = e as PlatformError;
@@ -175,7 +190,7 @@ async function researchAndDeliver(job: Job) {
       ...deck.usage,
     });
 
-    await submitDeliverable(job.jobId, document);
+    await submitDeliverable(job.jobId, document, job.pda);
     app.log.info({ jobId: job.jobId, calls: deck.usage.calls }, "delivered");
   } catch (e) {
     const err = e as PlatformError;
@@ -242,10 +257,22 @@ function assemble(
 
 await syncRateCard(config.PLATFORM_API);
 
+if (chainEnabled) {
+  // Idempotent (init_if_needed on-chain) — safe to run on every boot rather
+  // than tracking whether a previous run already did it.
+  await registerWalletIfNeeded(config.TIER as 1 | 2);
+  app.log.info("on-chain wallet registered (or already was)");
+} else {
+  app.log.warn(
+    "SOLANA_KEYPAIR_PATH / ACP_PROGRAM_ID not set — this agent will report job actions to " +
+      "the platform's off-chain state only, and will not sign any on-chain transaction."
+  );
+}
+
 try {
   await app.listen({ port: config.PORT, host: "0.0.0.0" });
   app.log.info(
-    `research-agent on :${config.PORT} — ${tierLabel}${STUB_MODE ? " — STUB MODE" : ""}`
+    `research-agent on :${config.PORT} — ${tierLabel}${STUB_MODE ? " — STUB MODE" : ""}${chainEnabled ? " — on-chain signing enabled" : ""}`
   );
 } catch (err) {
   app.log.error(err);

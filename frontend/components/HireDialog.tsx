@@ -2,10 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
 
 import { ApiError, api } from "@/lib/api";
 import { duration, usdc } from "@/lib/format";
 import { useSession } from "@/lib/session";
+import { useAcpProgram } from "@/lib/anchor";
+import { postJob, sha256Bytes } from "@/lib/transactions";
 import type { Agent } from "@/lib/types";
 import { EscrowFields, capsToBase, type Caps } from "./EscrowFields";
 import { Button, Field, ReputationBadge, TierBadge, inputClass } from "./ui";
@@ -21,10 +24,21 @@ import { Button, Field, ReputationBadge, TierBadge, inputClass } from "./ui";
  * This creates a DIRECT job: the agent is named, no bond is posted (the
  * employer chose them), and it must accept inside the 6h offer window or the
  * escrow comes back.
+ *
+ * Two steps, in this order — backend/src/services/jobs.ts assigns
+ * nonce/pda when the DB row is created, so that has to happen BEFORE the
+ * on-chain post_job transaction can use them:
+ *   1. api.createDirectJob(...)   — DB row created, nonce/pda assigned
+ *   2. postJob(ctx, { nonce, expectedPda, ... })  — wallet signs, escrow funds
+ *      then api.confirmJob(...)   — records the confirmed signature
+ * If step 2 fails, the DB row from step 1 already exists — this does not
+ * retry automatically (that would risk a duplicate job on a second click),
+ * it surfaces the job so the employer can find it and fund it from there.
  */
 export function HireDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
   const router = useRouter();
   const { address, signIn, signingIn } = useSession();
+  const ctx = useAcpProgram();
 
   const [title, setTitle] = useState("");
   const [spec, setSpec] = useState("");
@@ -38,6 +52,7 @@ export function HireDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [createdJobId, setCreatedJobId] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -48,14 +63,22 @@ export function HireDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!address) return void signIn();
+    if (!ctx) {
+      setError("Connect a wallet that can sign transactions to fund escrow on-chain.");
+      return;
+    }
 
     setBusy(true);
     setError(null);
     setFieldErrors({});
+    setCreatedJobId(null);
     const base = capsToBase(caps);
+    const deadline = new Date(Date.now() + Number(days) * 86_400_000);
 
+    // Step 1: create the DB row. This is what assigns nonce/pda.
+    let job: Awaited<ReturnType<typeof api.createDirectJob>>;
     try {
-      const job = await api.createDirectJob({
+      job = await api.createDirectJob({
         agentId: agent.id,
         title,
         spec,
@@ -63,9 +86,8 @@ export function HireDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
         fixedFeeCap: Number(base.fixedFeeCap) / 1e6,
         planningTokenCap: Number(base.planningTokenCap) / 1e6,
         tokenBudgetCap: Number(base.tokenBudgetCap) / 1e6,
-        deadline: new Date(Date.now() + Number(days) * 86_400_000).toISOString(),
+        deadline: deadline.toISOString(),
       });
-      router.push(`/jobs/${job.id}`);
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
@@ -73,9 +95,42 @@ export function HireDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
       } else {
         setError("Could not create the job");
       }
-    } finally {
       setBusy(false);
+      return;
     }
+
+    // Step 2: sign post_job with the nonce the backend just assigned, and
+    // record the confirmed signature. A mismatch between `job.nonce` and
+    // what postJob derives throws here, before any transaction is sent —
+    // see transactions.ts's expectedPda check.
+    try {
+      const specHash = await sha256Bytes(spec);
+      const { signature } = await postJob(ctx, {
+        jobType: "direct",
+        agent: new PublicKey(agent.wallet),
+        specHash,
+        planningFeeCapUsdc: Number(base.planningFeeCap) / 1e6,
+        fixedFeeCapUsdc: Number(base.fixedFeeCap) / 1e6,
+        planningTokenCapUsdc: Number(base.planningTokenCap) / 1e6,
+        tokenBudgetCapUsdc: Number(base.tokenBudgetCap) / 1e6,
+        minTier: agent.tier,
+        deadline,
+        nonce: job.nonce,
+        expectedPda: new PublicKey(job.pda!),
+      });
+      await api.confirmJob(job.id, { signature });
+    } catch (e) {
+      setCreatedJobId(job.id);
+      setError(
+        `The job was created, but funding escrow failed: ${
+          e instanceof Error ? e.message : "unknown error"
+        }. Open the job below to try again.`
+      );
+      setBusy(false);
+      return;
+    }
+
+    router.push(`/jobs/${job.id}`);
   }
 
   return (
@@ -163,7 +218,29 @@ export function HireDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
           6 hours to accept; if it does not, your escrow returns in full.
         </p>
 
-        {error && <p className="text-xs text-bad">{error}</p>}
+        {!ctx && (
+          <p className="text-[11px] leading-relaxed text-warn">
+            No wallet capable of signing transactions is connected — hiring needs to fund escrow
+            on-chain, not just create the listing.
+          </p>
+        )}
+
+        {error && (
+          <p className="text-xs text-bad">
+            {error}
+            {createdJobId && (
+              <>
+                {" "}
+                <a
+                  href={`/jobs/${createdJobId}`}
+                  className="underline hover:text-white"
+                >
+                  Open job
+                </a>
+              </>
+            )}
+          </p>
+        )}
 
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>

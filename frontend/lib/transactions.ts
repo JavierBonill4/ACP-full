@@ -49,15 +49,22 @@ export async function sha256Bytes(text: string): Promise<number[]> {
  */
 type DynamicAccounts = Record<string, { fetch: (pda: PublicKey) => Promise<unknown>; fetchNullable: (pda: PublicKey) => Promise<unknown> }>;
 
+/**
+ * Only resolves whether register_employer is needed — NOT the nonce. Nonce
+ * comes from the backend (see postJob below): services/jobs.ts's
+ * createCustomJob/createDirectJob precompute nonce/pda off-chain, in the DB,
+ * before any on-chain transaction exists. Deriving a second, independent
+ * nonce here (e.g. from EmployerProfile.nextNonce) can silently disagree
+ * with that precomputed value — if a job is ever created in the DB but its
+ * post_job transaction is abandoned, the chain's real next-nonce counter and
+ * the DB's "last nonce + 1" counter drift apart, and the two nonces would
+ * derive two different job PDAs for what's supposed to be the same job.
+ */
 async function resolveEmployerProfile(ctx: AcpCtx) {
   const employerProfile = employerProfilePda(ctx.publicKey);
   const accounts = ctx.program.account as unknown as DynamicAccounts;
   const existing = await accounts.employerProfile.fetchNullable(employerProfile).catch(() => null);
-  return {
-    employerProfile,
-    nonce: existing ? (existing as { nextNonce: BN }).nextNonce : new BN(0),
-    needsRegistration: !existing,
-  };
+  return { employerProfile, needsRegistration: !existing };
 }
 
 interface JobContext {
@@ -112,6 +119,24 @@ export interface PostJobArgs {
   tokenBudgetCapUsdc: number;
   minTier: number;
   deadline: Date;
+  /**
+   * Assigned by the backend at job-creation time (createCustomJob /
+   * createDirectJob in services/jobs.ts already computed this and the
+   * matching `pda` before this function is ever called — see that file's
+   * comment on why). NOT derived here. Passing a nonce this employer hasn't
+   * actually been assigned next produces a valid transaction that creates
+   * the WRONG job — Anchor has no way to catch that, since nonce is just a
+   * number to it.
+   */
+  nonce: number;
+  /**
+   * The `pda` the backend already stored for this job (from the same
+   * creation call that gave you `nonce`). Optional, but worth passing: this
+   * function derives its own job PDA from `nonce` and throws BEFORE sending
+   * any transaction if the two don't match, rather than spending a
+   * transaction fee to create a job account nothing in your DB points at.
+   */
+  expectedPda?: PublicKey;
 }
 
 /**
@@ -135,8 +160,18 @@ export async function postJob(
   args: PostJobArgs
 ): Promise<{ job: PublicKey; signature: string }> {
   const { program, publicKey: employer } = ctx;
-  const { employerProfile, nonce, needsRegistration } = await resolveEmployerProfile(ctx);
+  const { employerProfile, needsRegistration } = await resolveEmployerProfile(ctx);
+  const nonce = new BN(args.nonce);
   const job = jobPda(employer, nonce);
+
+  if (args.expectedPda && !job.equals(args.expectedPda)) {
+    throw new Error(
+      `Computed job PDA ${job.toBase58()} from nonce ${args.nonce} does not match the ` +
+        `backend's ${args.expectedPda.toBase58()}. Something is out of sync between the DB's ` +
+        `assigned nonce and this derivation — do not send this transaction.`
+    );
+  }
+
   const vault = vaultPda(job);
   const usdcMint = getUsdcMint();
   const employerToken = await getAssociatedTokenAddress(usdcMint, employer);

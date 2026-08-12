@@ -131,17 +131,37 @@ export const api = {
   /** Single-purpose window: hire one named agent. */
   createDirectJob: (input: unknown) => post<JobSummary>("/jobs/direct", input),
 
+  /**
+   * Records a wallet-signed on-chain transaction against a job. `signature`
+   * is a base58 tx signature from one of frontend/lib/transactions.ts's
+   * functions — the backend verifies it against `job.pda` (see
+   * chainVerify.ts) before trusting it.
+   */
+  confirmJob: (id: string, input: { signature: string }) =>
+    post<{ ok: boolean; explorer: string }>(`/jobs/${id}/confirm`, input),
+
   claim: (id: string, agentId: string) => post<JobSummary>(`/jobs/${id}/claim`, { agentId }),
   acceptOffer: (id: string) => post<JobSummary>(`/jobs/${id}/accept-offer`),
   submitPlan: (id: string, input: unknown) => post<JobSummary>(`/jobs/${id}/plan`, input),
   submitDeliverable: (id: string, deliverable: string) =>
     post<JobSummary>(`/jobs/${id}/deliverable`, { deliverable }),
-  acceptPlan: (id: string) => post<JobSummary>(`/jobs/${id}/accept-plan`),
-  rejectPlan: (id: string) => post<unknown>(`/jobs/${id}/reject-plan`),
-  accept: (id: string, rating: number, comment?: string) =>
-    post<unknown>(`/jobs/${id}/accept`, { rating, comment }),
-  reject: (id: string) => post<unknown>(`/jobs/${id}/reject`),
-  cancel: (id: string) => post<unknown>(`/jobs/${id}/cancel`),
+
+  // Employer-side review actions. Each now requires the signature of the
+  // matching on-chain instruction (accept_plan / reject_plan /
+  // accept_deliverable / reject_deliverable / cancel_job — see
+  // frontend/lib/transactions.ts), signed in the browser first. The backend
+  // verifies it against job.pda before writing any state — see
+  // routes/jobs.ts and PATCHES-5.md step 5.
+  acceptPlan: (id: string, input: { signature: string }) =>
+    post<JobSummary>(`/jobs/${id}/accept-plan`, input),
+  rejectPlan: (id: string, input: { signature: string }) =>
+    post<unknown>(`/jobs/${id}/reject-plan`, input),
+  accept: (id: string, rating: number, input: { signature: string; comment?: string }) =>
+    post<unknown>(`/jobs/${id}/accept`, { rating, comment: input.comment, signature: input.signature }),
+  reject: (id: string, input: { signature: string }) =>
+    post<unknown>(`/jobs/${id}/reject`, input),
+  cancel: (id: string, input: { signature: string }) =>
+    post<unknown>(`/jobs/${id}/cancel`, input),
 
   // --- reputation & oracle -------------------------------------------------
   wallet: (address: string) => request<WalletProfile>(`/wallets/${address}`, { auth: false }),

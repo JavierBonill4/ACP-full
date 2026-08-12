@@ -3,12 +3,21 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
 
 import SlideDeck from "@/components/SlideDeck";
 import { AddressLink, Badge, Button, Field, TrustNotice, Window, cx, inputClass } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
 import { STATE_LABEL, STATE_TONE, relativeTime, usdc } from "@/lib/format";
 import { useSession } from "@/lib/session";
+import { useAcpProgram, type AcpCtx } from "@/lib/anchor";
+import {
+  acceptDeliverable as chainAcceptDeliverable,
+  acceptPlan as chainAcceptPlan,
+  cancelJob as chainCancelJob,
+  rejectDeliverable as chainRejectDeliverable,
+  rejectPlan as chainRejectPlan,
+} from "@/lib/transactions";
 import type { JobDetail } from "@/lib/types";
 
 /**
@@ -17,10 +26,20 @@ import type { JobDetail } from "@/lib/types";
  * Only the actions valid for this job's current state *and* this wallet's role
  * are rendered. Showing a disabled "accept" button to someone who is neither
  * party is not information, it is noise.
+ *
+ * Employer-side actions below now sign on-chain first (transactions.ts),
+ * then call the existing API route with the resulting signature — those
+ * routes verify it against job.pda before touching state (see
+ * routes/jobs.ts). Agent-side actions (accept offer / submit plan / submit
+ * deliverable) are left as pure API calls: that identity is meant to be the
+ * agent's own backend keypair (agents/research-agent/src/chain.ts), not a
+ * browser wallet, and the backend does not require a signature on those
+ * routes yet.
  */
 export default function JobPage() {
   const { id } = useParams<{ id: string }>();
   const { address } = useSession();
+  const ctx = useAcpProgram();
   const [job, setJob] = useState<JobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,7 +60,7 @@ export default function JobPage() {
       await fn();
       load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "That did not work");
+      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "That did not work");
     } finally {
       setBusy(false);
     }
@@ -99,7 +118,7 @@ export default function JobPage() {
         <p className="rounded-lg border border-bad/40 bg-bad/5 px-3 py-2 text-xs text-bad">{error}</p>
       )}
 
-      <ActionPanel job={job} isEmployer={isEmployer} isAgent={isAgent} busy={busy} act={act} />
+      <ActionPanel job={job} isEmployer={isEmployer} isAgent={isAgent} busy={busy} act={act} ctx={ctx} />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Money job={job} escrow={escrow} />
@@ -125,12 +144,14 @@ function ActionPanel({
   isAgent,
   busy,
   act,
+  ctx,
 }: {
   job: JobDetail;
   isEmployer: boolean;
   isAgent: boolean;
   busy: boolean;
   act: (fn: () => Promise<unknown>) => Promise<void>;
+  ctx: AcpCtx | null;
 }) {
   const [outline, setOutline] = useState("");
   const [planningFee, setPlanningFee] = useState("0");
@@ -145,6 +166,18 @@ function ActionPanel({
       <div className="space-y-3 p-5">{children}</div>
     </Window>
   );
+
+  // Every employer-side action below signs on-chain first, so it needs both
+  // a connected, signing wallet AND an on-chain job to point at. `job.pda`
+  // should always be set now that creation assigns it up front — the
+  // `!job.pda` half of this guard is only a safety net for older jobs.
+  const chainReady = Boolean(ctx && job.pda);
+  const chainHint = !ctx
+    ? "Connect a wallet that can sign transactions to act on this job."
+    : !job.pda
+      ? "This job has no on-chain record — this action isn't available."
+      : null;
+  const jobPda = () => new PublicKey(job.pda!);
 
   if (isAgent && job.state === "OFFERED") {
     return box(
@@ -220,13 +253,31 @@ function ActionPanel({
           employer must not be able to freeze an agent&apos;s capital.
         </p>
         <div className="flex gap-2">
-          <Button disabled={busy} onClick={() => act(() => api.acceptPlan(job.id))}>
+          <Button
+            disabled={busy || !chainReady}
+            onClick={() =>
+              act(async () => {
+                const { signature } = await chainAcceptPlan(ctx!, jobPda());
+                await api.acceptPlan(job.id, { signature });
+              })
+            }
+          >
             Accept plan
           </Button>
-          <Button variant="danger" disabled={busy} onClick={() => act(() => api.rejectPlan(job.id))}>
+          <Button
+            variant="danger"
+            disabled={busy || !chainReady}
+            onClick={() =>
+              act(async () => {
+                const { signature } = await chainRejectPlan(ctx!, jobPda());
+                await api.rejectPlan(job.id, { signature });
+              })
+            }
+          >
             Reject
           </Button>
         </div>
+        {chainHint && <p className="text-[11px] leading-relaxed text-warn">{chainHint}</p>}
         <p className="text-[11px] leading-relaxed text-white/30">
           Rejecting settles the job now: the agent keeps its planning fee and recovers its planning
           tokens, and you get everything else back. You receive no rights to the work.
@@ -270,13 +321,31 @@ function ActionPanel({
           Auto-accepts award a 5, so a rating is only worth giving if you actually read the work.
         </p>
         <div className="flex gap-2">
-          <Button disabled={busy} onClick={() => act(() => api.accept(job.id, rating))}>
+          <Button
+            disabled={busy || !chainReady}
+            onClick={() =>
+              act(async () => {
+                const { signature } = await chainAcceptDeliverable(ctx!, jobPda(), rating);
+                await api.accept(job.id, rating, { signature });
+              })
+            }
+          >
             Accept and pay
           </Button>
-          <Button variant="danger" disabled={busy} onClick={() => act(() => api.reject(job.id))}>
+          <Button
+            variant="danger"
+            disabled={busy || !chainReady}
+            onClick={() =>
+              act(async () => {
+                const { signature } = await chainRejectDeliverable(ctx!, jobPda());
+                await api.reject(job.id, { signature });
+              })
+            }
+          >
             Reject
           </Button>
         </div>
+        {chainHint && <p className="text-[11px] leading-relaxed text-warn">{chainHint}</p>}
         <p className="text-[11px] leading-relaxed text-white/30">
           Rejecting returns the completion fee and unused budget to you. The agent still recovers
           every token it burned and keeps its planning fee — and{" "}
@@ -294,9 +363,19 @@ function ActionPanel({
             ? "Waiting for a general-purpose agent to claim this."
             : `Waiting for ${job.agent?.name ?? "the agent"} to accept.`}
         </p>
-        <Button variant="ghost" disabled={busy} onClick={() => act(() => api.cancel(job.id))}>
+        <Button
+          variant="ghost"
+          disabled={busy || !chainReady}
+          onClick={() =>
+            act(async () => {
+              const { signature } = await chainCancelJob(ctx!, jobPda());
+              await api.cancel(job.id, { signature });
+            })
+          }
+        >
           Cancel and refund
         </Button>
+        {chainHint && <p className="text-[11px] leading-relaxed text-warn">{chainHint}</p>}
       </>
     );
   }

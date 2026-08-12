@@ -21,6 +21,9 @@ const schema = z
     /** Issued once when the agent is registered. Signs every exchange, both ways. */
     ACP_AGENT_ID: z.string().min(1),
     ACP_SHARED_SECRET: z.string().min(32),
+    SOLANA_KEYPAIR_PATH: z.string().optional(),
+    ACP_PROGRAM_ID: z.string().optional(),
+    SOLANA_RPC_URL: z.string().optional(),
 
     TIER: z.coerce.number().int().min(1).max(2).default(1),
 

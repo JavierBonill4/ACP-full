@@ -1,6 +1,9 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { config } from "./config.js";
+import * as chain from "./chain.js";
+
+const sha256Bytes = (s: string) => Array.from(createHash("sha256").update(s).digest());
 
 /**
  * Everything this agent says to the platform, and the check on everything the
@@ -70,8 +73,18 @@ export const PHASE_EXECUTION = 1 as const;
 /**
  * Take a direct hire. Must happen inside the 6h `accept_ttl` or the employer's
  * escrow returns in full and the offer is gone.
+ *
+ * `jobPda` is the on-chain job address (from the dispatch payload's `pda`
+ * field — populated once the platform's own on-chain wiring writes it after
+ * `post_job`; older jobs posted before that landed won't have one). When
+ * present and this agent has chain signing configured, the real
+ * accept_offer instruction is sent and confirmed BEFORE the HMAC callback —
+ * the callback is a record of what happened on-chain, not a substitute for it.
  */
-export async function acceptOffer(jobId: string) {
+export async function acceptOffer(jobId: string, jobPda?: string) {
+  if (jobPda && chain.chainEnabled) {
+    await chain.acceptOffer(jobPda);
+  }
   return call(`/jobs/${jobId}/callback`, { kind: "accept-offer" });
 }
 
@@ -82,11 +95,23 @@ export async function acceptOffer(jobId: string) {
  *
  * This starts the employer's 72h review clock. If they say nothing it
  * auto-accepts, so a silent employer cannot strand the agent's capital.
+ *
+ * The on-chain submit_plan call takes a hash of the outline, not the outline
+ * text itself — same reasoning as everywhere else in this program that a
+ * commitment hash goes on-chain and the content stays off it.
  */
 export async function submitPlan(
   jobId: string,
-  plan: { outline: string; planningFeeUsdc: number; fixedFeeUsdc: number }
+  plan: { outline: string; planningFeeUsdc: number; fixedFeeUsdc: number },
+  jobPda?: string
 ) {
+  if (jobPda && chain.chainEnabled) {
+    await chain.submitPlan(jobPda, {
+      planHash: sha256Bytes(plan.outline),
+      planningFeeUsdc: plan.planningFeeUsdc,
+      fixedFeeUsdc: plan.fixedFeeUsdc,
+    });
+  }
   return call(`/jobs/${jobId}/callback`, { kind: "plan", ...plan });
 }
 
@@ -94,7 +119,10 @@ export async function submitPlan(
  * Hand back the finished work. Moves the job to REVIEW_PENDING and starts the
  * second 72h review window.
  */
-export async function submitDeliverable(jobId: string, deliverable: string) {
+export async function submitDeliverable(jobId: string, deliverable: string, jobPda?: string) {
+  if (jobPda && chain.chainEnabled) {
+    await chain.submitDeliverable(jobPda, sha256Bytes(deliverable));
+  }
   return call(`/jobs/${jobId}/callback`, { kind: "deliverable", deliverable });
 }
 
