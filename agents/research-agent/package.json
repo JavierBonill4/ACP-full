@@ -10,6 +10,7 @@
     "t1": "tsx --env-file=.env.t1 src/index.ts",
     "t2": "tsx --env-file=.env.t2 src/index.ts",
     "register": "tsx --env-file=.env scripts/register.ts",
+    "set-t2-key": "tsx --env-file=.env.t2 scripts/set-provider-key.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -19,7 +20,8 @@
     "tweetnacl": "^1.0.3",
     "zod": "^3.23.8",
     "@coral-xyz/anchor": "^0.30.1",
-    "bn.js": "^5.2.1"
+    "bn.js": "^5.2.1",
+    "pptxgenjs": "^3.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",

@@ -143,23 +143,56 @@ export const api = {
   claim: (id: string, agentId: string) => post<JobSummary>(`/jobs/${id}/claim`, { agentId }),
   acceptOffer: (id: string) => post<JobSummary>(`/jobs/${id}/accept-offer`),
   submitPlan: (id: string, input: unknown) => post<JobSummary>(`/jobs/${id}/plan`, input),
-  submitDeliverable: (id: string, deliverable: string) =>
-    post<JobSummary>(`/jobs/${id}/deliverable`, { deliverable }),
+  /** The deliverable is a real file (filename + mimeType + base64 bytes), not text. */
+  submitDeliverable: (
+    id: string,
+    deliverable: { filename: string; mimeType: string; base64: string }
+  ) => post<JobSummary>(`/jobs/${id}/deliverable`, { deliverable }),
+
+  /**
+   * Fetches the deliverable file as a Blob, carrying the session's bearer
+   * token — a plain `<a href>` to this URL wouldn't, since the token lives
+   * in memory/sessionStorage rather than a cookie, so a non-party viewer of
+   * a not-yet-settled job would just get a 403 from a bare link.
+   */
+  downloadDeliverable: async (id: string): Promise<{ blob: Blob; filename: string }> => {
+    const t = loadToken();
+    const res = await fetch(`${API_BASE}/jobs/${id}/deliverable`, {
+      headers: t ? { authorization: `Bearer ${t}` } : {},
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError(body?.error ?? `Request failed (${res.status})`, res.status);
+    }
+    const disposition = res.headers.get("content-disposition") ?? "";
+    const match = /filename="([^"]*)"/.exec(disposition);
+    return { blob: await res.blob(), filename: match?.[1] ?? "deliverable" };
+  },
 
   // Employer-side review actions. Each now requires the signature of the
   // matching on-chain instruction (accept_plan / reject_plan /
-  // accept_deliverable / reject_deliverable / cancel_job — see
-  // frontend/lib/transactions.ts), signed in the browser first. The backend
-  // verifies it against job.pda before writing any state — see
-  // routes/jobs.ts and PATCHES-5.md step 5.
+  // accept_deliverable / cancel_job — see frontend/lib/transactions.ts),
+  // signed in the browser first. The backend verifies it against job.pda
+  // before writing any state — see routes/jobs.ts and PATCHES-5.md step 5.
+  //
+  // There is no reject after a deliverable is submitted — its fee + token
+  // payout is unconditional. `accept`'s `tip` is 0..0.10 USDC, drawn from
+  // the employer's own unused-escrow refund; omit it (or pass 0) for none.
   acceptPlan: (id: string, input: { signature: string }) =>
     post<JobSummary>(`/jobs/${id}/accept-plan`, input),
   rejectPlan: (id: string, input: { signature: string }) =>
     post<unknown>(`/jobs/${id}/reject-plan`, input),
-  accept: (id: string, rating: number, input: { signature: string; comment?: string }) =>
-    post<unknown>(`/jobs/${id}/accept`, { rating, comment: input.comment, signature: input.signature }),
-  reject: (id: string, input: { signature: string }) =>
-    post<unknown>(`/jobs/${id}/reject`, input),
+  accept: (
+    id: string,
+    rating: number,
+    input: { signature: string; comment?: string; tipUsdc?: number }
+  ) =>
+    post<unknown>(`/jobs/${id}/accept`, {
+      rating,
+      comment: input.comment,
+      tip: input.tipUsdc ?? 0,
+      signature: input.signature,
+    }),
   cancel: (id: string, input: { signature: string }) =>
     post<unknown>(`/jobs/${id}/cancel`, input),
 

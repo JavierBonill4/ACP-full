@@ -438,8 +438,10 @@ pub mod acp {
     // -----------------------------------------------------------------
     // Terminal transitions
     //
-    // All five funnel into `finalize`, which is the only place money moves out
-    // of the vault and the only place reputation is written.
+    // reject_plan, accept_deliverable, auto_accept, expire_job, and
+    // cancel_job all funnel into `finalize`, which is the only place money
+    // moves out of the vault and the only place reputation is written.
+    // There is no reject_deliverable — see accept_deliverable's doc comment.
     // -----------------------------------------------------------------
 
     pub fn reject_plan(ctx: Context<Finalize>) -> Result<()> {
@@ -451,11 +453,21 @@ pub mod acp {
             ctx.accounts.job.employer == ctx.accounts.actor.key(),
             AcpError::NotEmployer
         );
-        finalize(ctx, Outcome::PlanRejected, 0, false)
+        finalize(ctx, Outcome::PlanRejected, 0, false, 0)
     }
 
-    pub fn accept_deliverable(ctx: Context<Finalize>, rating: u8) -> Result<()> {
+    /// The only way a completed deliverable settles. There is no
+    /// `reject_deliverable` — once the agent has submitted, its planning fee,
+    /// completion fee, and token costs are earned unconditionally. The
+    /// employer's remaining discretion is `rating` (reputation only, no
+    /// payout effect) and `tip`, an optional bonus up to `MAX_TIP` (0.10
+    /// USDC) drawn from their own unused escrow, not funded on top of it —
+    /// see `settle` in math.rs for exactly how it's clamped and distributed.
+    /// They still receive whatever's left in escrow after fees, tokens, and
+    /// tip, same as before.
+    pub fn accept_deliverable(ctx: Context<Finalize>, rating: u8, tip: u64) -> Result<()> {
         require!(rating <= 10, AcpError::BadRating);
+        require!(tip <= MAX_TIP, AcpError::TipTooHigh);
         require!(
             ctx.accounts.job.state == JobState::ReviewPending as u8,
             AcpError::BadState
@@ -464,19 +476,7 @@ pub mod acp {
             ctx.accounts.job.employer == ctx.accounts.actor.key(),
             AcpError::NotEmployer
         );
-        finalize(ctx, Outcome::Accepted, rating, false)
-    }
-
-    pub fn reject_deliverable(ctx: Context<Finalize>) -> Result<()> {
-        require!(
-            ctx.accounts.job.state == JobState::ReviewPending as u8,
-            AcpError::BadState
-        );
-        require!(
-            ctx.accounts.job.employer == ctx.accounts.actor.key(),
-            AcpError::NotEmployer
-        );
-        finalize(ctx, Outcome::DeliverableRejected, 0, false)
+        finalize(ctx, Outcome::Accepted, rating, false, tip)
     }
 
     /// Permissionless crank. A silent employer must not be able to freeze
@@ -497,7 +497,9 @@ pub mod acp {
             // forward. Handled by `auto_accept_plan` instead.
             return err!(AcpError::BadState);
         }
-        finalize(ctx, Outcome::Accepted, 5, true)
+        // No tip on an auto-accept — there is no employer decision here to
+        // attach one to.
+        finalize(ctx, Outcome::Accepted, 5, true, 0)
     }
 
     /// Separate from `auto_accept` because accepting a *plan* is not a
@@ -533,7 +535,7 @@ pub mod acp {
             _ => false,
         };
         require!(blown, AcpError::NotExpired);
-        finalize(ctx, Outcome::Expired, 0, false)
+        finalize(ctx, Outcome::Expired, 0, false, 0)
     }
 
     /// Employer withdraws an unclaimed job. Full refund, nothing slashed.
@@ -544,7 +546,7 @@ pub mod acp {
             AcpError::BadState
         );
         require!(job.employer == ctx.accounts.actor.key(), AcpError::NotEmployer);
-        finalize(ctx, Outcome::Expired, 0, false)
+        finalize(ctx, Outcome::Expired, 0, false, 0)
     }
 
     // -----------------------------------------------------------------
@@ -633,7 +635,7 @@ pub mod acp {
 /// The single place value leaves the vault. Every terminal transition routes
 /// here so the settlement matrix and the reputation update can never drift
 /// apart between code paths.
-fn finalize(ctx: Context<Finalize>, outcome: Outcome, rating: u8, auto: bool) -> Result<()> {
+fn finalize(ctx: Context<Finalize>, outcome: Outcome, rating: u8, auto: bool, tip: u64) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let fee_bps = ctx.accounts.oracle_config.protocol_fee_bps;
 
@@ -658,6 +660,7 @@ fn finalize(ctx: Context<Finalize>, outcome: Outcome, rating: u8, auto: bool) ->
         ctx.accounts.job.planning_tokens_used,
         ctx.accounts.job.execution_tokens_used,
         fee_bps,
+        tip,
     );
 
     let employer = ctx.accounts.job.employer;
@@ -748,7 +751,7 @@ fn finalize(ctx: Context<Finalize>, outcome: Outcome, rating: u8, auto: bool) ->
                     .total_value_settled
                     .saturating_add(s.agent_immediate.saturating_add(s.agent_holdback));
             }
-            Outcome::PlanRejected | Outcome::DeliverableRejected => {
+            Outcome::PlanRejected => {
                 profile.jobs_rejected = profile.jobs_rejected.saturating_add(1);
             }
             Outcome::Expired => {
@@ -758,7 +761,7 @@ fn finalize(ctx: Context<Finalize>, outcome: Outcome, rating: u8, auto: bool) ->
     }
 
     let employer_profile = &mut ctx.accounts.employer_profile;
-    if matches!(outcome, Outcome::PlanRejected | Outcome::DeliverableRejected) {
+    if matches!(outcome, Outcome::PlanRejected) {
         employer_profile.jobs_rejected = employer_profile.jobs_rejected.saturating_add(1);
     }
     if auto {
@@ -791,6 +794,7 @@ fn finalize(ctx: Context<Finalize>, outcome: Outcome, rating: u8, auto: bool) ->
         employer_refund: s.employer_refund,
         bond_slashed: outcome == Outcome::Expired && bond > 0,
         rating,
+        tip: s.tip_paid,
     });
     Ok(())
 }
@@ -1161,6 +1165,8 @@ pub struct JobSettled {
     pub employer_refund: u64,
     pub bond_slashed: bool,
     pub rating: u8,
+    /// The tip actually paid — post headroom-clamp, not the raw request.
+    pub tip: u64,
 }
 
 #[event]

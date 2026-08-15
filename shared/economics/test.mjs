@@ -13,6 +13,8 @@ import {
   WRS_SCALE,
   DEFAULT_PROTOCOL_FEE_BPS,
   MIN_BOND,
+  MAX_TIP,
+  DEFAULT_TIP,
   TIER_RECONCILED,
   TIER_METERED,
   TIER1_VALUE_CAP,
@@ -62,6 +64,7 @@ function job({
   tier = TIER_METERED,
   outcome = OUTCOME.ACCEPTED,
   bps = DEFAULT_PROTOCOL_FEE_BPS,
+  tip = 0n,
 } = {}) {
   const total = pfc + ffc + ptc + tbc;
   return {
@@ -77,6 +80,7 @@ function job({
       planningTokensUsed: pt,
       executionTokensUsed: et,
       protocolFeeBps: bps,
+      tip,
     }),
   };
 }
@@ -106,14 +110,38 @@ console.log("\n--- settlement matrix ---");
 }
 
 {
-  const { total, result: s } = job({
-    outcome: OUTCOME.DELIVERABLE_REJECTED,
-    pt: usdc(3),
-    et: usdc(48),
-  });
-  eq(s.agentImmediate, usdc(2) - usdc(0.02) + usdc(51), "deliverable rejected: every token recovered");
-  eq(s.employerRefund, usdc(20) + usdc(2), "deliverable rejected: employer gets the completion fee back");
-  eq(settlementTotal(s), total, "deliverable rejected: conservation");
+  // There is no DELIVERABLE_REJECTED row anymore — a submitted deliverable's
+  // fee + token payout is unconditional. Instead, accepted-with-a-tip: the
+  // tip comes out of the employer's refund, on top of the agent's already-
+  // unconditional fee + token payout.
+  const { total, result: without } = job({ pt: usdc(1.5), et: usdc(30) });
+  const { result: withTip } = job({ pt: usdc(1.5), et: usdc(30), tip: MAX_TIP });
+  eq(withTip.agentImmediate, without.agentImmediate + MAX_TIP, "tip adds to the agent's payout");
+  eq(withTip.employerRefund, without.employerRefund - MAX_TIP, "tip comes out of the employer's refund");
+  eq(withTip.protocolFee, without.protocolFee, "tip is the employer's own money — no protocol cut");
+  eq(withTip.tipPaid, MAX_TIP, "tipPaid reports the full requested tip when headroom allows it");
+  eq(settlementTotal(withTip), total, "accepted with tip: conservation");
+}
+
+{
+  // Tip is ignored on every outcome but ACCEPTED, even if a caller bug
+  // passes a nonzero value in.
+  for (const outcome of [OUTCOME.PLAN_REJECTED, OUTCOME.EXPIRED]) {
+    const { result: without } = job({ outcome, pt: usdc(2.5), tip: 0n });
+    const { result: withTipArg } = job({ outcome, pt: usdc(2.5), tip: MAX_TIP });
+    eq(JSON.stringify(withTipArg, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
+      JSON.stringify(without, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
+      `tip must not leak into outcome ${outcome}`);
+  }
+}
+
+{
+  // No headroom left once fees + full token reimbursement exhaust escrow —
+  // the clamped tip must be 0, not the raw request, and conservation must
+  // still hold rather than overpay the agent.
+  const { total, result: s } = job({ pt: usdc(3), et: usdc(50), tip: MAX_TIP });
+  eq(s.tipPaid, 0n, "no headroom left, so the clamped tip is 0");
+  eq(settlementTotal(s), total, "fully-saturated job with a tip request still conserves");
 }
 
 {
@@ -134,6 +162,21 @@ console.log("\n--- settlement matrix ---");
   eq(s.agentImmediate, usdc(11) - usdc(0.11), "T1: fees settle immediately");
   eq(s.agentHoldback, usdc(20), "T1: token portion held back");
   eq(settlementTotal(s), total, "T1: conservation");
+}
+
+{
+  // A tip is a same-transaction employer decision, not something requiring
+  // reconciliation like token usage — it must never be held back, even T1.
+  const { total, result: s } = job({
+    tier: TIER_RECONCILED,
+    pfc: usdc(1), ffc: usdc(10), ptc: usdc(2), tbc: usdc(40),
+    pf: usdc(1), ff: usdc(10),
+    pt: usdc(2), et: usdc(18),
+    tip: MAX_TIP,
+  });
+  eq(s.agentImmediate, usdc(11) - usdc(0.11) + MAX_TIP, "T1: tip settles immediately alongside fees");
+  eq(s.agentHoldback, usdc(20), "T1: only the token portion is held back, never the tip");
+  eq(settlementTotal(s), total, "T1 with tip: conservation");
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +226,7 @@ eq(valueWeight(1_000_000n * ONE_USDC), 8n, "value weight clamps at 8");
 {
   let wrs = 0n;
   for (let i = 0; i < 11; i++) {
-    wrs = applyWrs(wrs, OUTCOME.DELIVERABLE_REJECTED, 0, usdc(50));
+    wrs = applyWrs(wrs, OUTCOME.PLAN_REJECTED, 0, usdc(50));
   }
   eq(wrs, 0n, "WRS floors at zero after 11 rejections");
 }
@@ -198,7 +241,7 @@ eq(valueWeight(1_000_000n * ONE_USDC), 8n, "value weight clamps at 8");
   const start = 10n * WRS_SCALE;
   ok(applyWrs(start, OUTCOME.ACCEPTED, 10, usdc(50)) > start, "a 10/10 raises the score");
   ok(applyWrs(start, OUTCOME.ACCEPTED, 0, usdc(50)) < start, "a 0/10 lowers the score");
-  ok(applyWrs(start, OUTCOME.EXPIRED, 0, usdc(50)) < applyWrs(start, OUTCOME.DELIVERABLE_REJECTED, 0, usdc(50)),
+  ok(applyWrs(start, OUTCOME.EXPIRED, 0, usdc(50)) < applyWrs(start, OUTCOME.PLAN_REJECTED, 0, usdc(50)),
     "expiry costs more than rejection");
 }
 
@@ -255,10 +298,12 @@ for (let i = 0; i < 5000; i++) {
   const outcome = pick([
     OUTCOME.ACCEPTED,
     OUTCOME.PLAN_REJECTED,
-    OUTCOME.DELIVERABLE_REJECTED,
     OUTCOME.EXPIRED,
   ]);
   const tier = pick([TIER_RECONCILED, TIER_METERED]);
+  // Occasionally request more tip than could possibly fit, to exercise the
+  // headroom clamp under random saturation, not just at the caps.
+  const tip = pick([0n, DEFAULT_TIP, MAX_TIP, MAX_TIP * 3n]);
 
   const s = settle({
     outcome,
@@ -271,6 +316,7 @@ for (let i = 0; i < 5000; i++) {
     planningTokensUsed: pt,
     executionTokensUsed: et,
     protocolFeeBps: DEFAULT_PROTOCOL_FEE_BPS,
+    tip,
   });
 
   if (settlementTotal(s) !== total) conservationFailures++;

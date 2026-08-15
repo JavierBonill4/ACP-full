@@ -12,6 +12,7 @@ import {
   verify,
 } from "./platform.js";
 import { buildPlan, research } from "./research.js";
+import { buildPptx, slugify } from "./deck-to-pptx.js";
 import { syncRateCard } from "./ratecard.js";
 import { chainEnabled, claimJob as chainClaimJob, registerWalletIfNeeded } from "./chain.js";
 
@@ -184,13 +185,26 @@ async function researchAndDeliver(job: Job) {
       await postProgress(job.jobId, m).catch(() => {});
     });
 
-    const document = assemble(job.title, deck.markdown, {
+    // The deliverable is a real .pptx now, not markdown wrapped in more
+    // markdown — assemble() used to build a text wrapper the frontend's
+    // SlideDeck component rendered; buildPptx renders title/content/
+    // provenance as actual slides in a file someone can open in PowerPoint,
+    // Keynote, or Google Slides.
+    const pptxBuffer = await buildPptx(job.title, deck.markdown, {
       tier: config.TIER,
       stub: STUB_MODE,
       ...deck.usage,
     });
 
-    await submitDeliverable(job.jobId, document, job.pda);
+    await submitDeliverable(
+      job.jobId,
+      {
+        filename: `${slugify(job.title)}.pptx`,
+        mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        base64: pptxBuffer.toString("base64"),
+      },
+      job.pda
+    );
     app.log.info({ jobId: job.jobId, calls: deck.usage.calls }, "delivered");
   } catch (e) {
     const err = e as PlatformError;
@@ -207,52 +221,8 @@ app.post("/cancel", async (req, reply) => {
 });
 
 // ---------------------------------------------------------------------------
-
-/**
- * Wraps the slides with a title slide and a provenance slide.
- *
- * The provenance slide is not decoration. It tells the employer which tier
- * produced the deck and therefore how the token bill they are about to pay was
- * arrived at — observed by the gateway, or asserted by this agent. That
- * distinction is the entire difference between the two tiers and it belongs in
- * the deliverable, not buried in a settings page.
- */
-function assemble(
-  title: string,
-  slides: string,
-  meta: { tier: number; stub: boolean; inputTokens: number; outputTokens: number; calls: number }
-): string {
-  const metering =
-    meta.tier === 2
-      ? "Token usage was measured by the platform gateway from the provider's own response. This agent never counted its own work."
-      : "Token usage was self-reported by this agent. The platform bounded it against the employer's funded cap but did not verify it against the provider.";
-
-  return [
-    `# ${title}`,
-    "",
-    `> Researched and assembled by an ACP agent (tier ${meta.tier}).`,
-    "",
-    "---",
-    "",
-    slides,
-    "",
-    "---",
-    "",
-    "## Provenance",
-    "",
-    `- Produced by \`research-agent\` at tier ${meta.tier}`,
-    `- ${meta.calls} model call${meta.calls === 1 ? "" : "s"}, ` +
-      `${meta.inputTokens.toLocaleString()} in / ${meta.outputTokens.toLocaleString()} out`,
-    `- ${metering}`,
-    meta.stub
-      ? "- **Stub mode: no model was called and the content above is placeholder text.**"
-      : "- Content is model-generated and has not been independently verified",
-    "",
-    `> ${metering}`,
-    "",
-  ].join("\n");
-}
-
+// The title-slide/provenance-slide wrapping this used to do as markdown text
+// (`assemble()`) now happens as real slides in deck-to-pptx.ts's buildPptx.
 // ---------------------------------------------------------------------------
 
 await syncRateCard(config.PLATFORM_API);

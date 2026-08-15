@@ -7,6 +7,7 @@ import {
   OUTCOME,
   applyWrs,
   escrowTotal,
+  formatUsdc,
   requiredBond,
   settle,
   tierHasHoldback,
@@ -452,9 +453,13 @@ export interface FinalizeOptions {
   comment?: string;
   auto?: boolean;
   actor?: string;
+  /** 0..MAX_TIP base units. Only meaningful (and only ever nonzero) on
+   *  OUTCOME.ACCEPTED — settle() forces it to 0 for every other outcome
+   *  regardless of what's passed in, same as the on-chain math. */
+  tip?: bigint;
   /** Confirmed on-chain settlement transaction, when this outcome was
-   *  triggered by a wallet-signed action (accept/reject/cancel) rather than
-   *  the permissionless crank. Verified by the caller before this runs. */
+   *  triggered by a wallet-signed action (accept/cancel) rather than the
+   *  permissionless crank. Verified by the caller before this runs. */
   txSig?: string;
 }
 
@@ -484,6 +489,7 @@ export async function finalizeJob(jobId: string, opts: FinalizeOptions) {
     tokenBudgetCap: job.tokenBudgetCap,
     planningTokensUsed: job.planningTokensUsed,
     executionTokensUsed: job.executionTokensUsed,
+    tip: opts.tip ?? 0n,
   });
 
   const updated = await prisma.job.update({
@@ -492,6 +498,7 @@ export async function finalizeJob(jobId: string, opts: FinalizeOptions) {
       state: opts.outcome === OUTCOME.EXPIRED ? "EXPIRED" : "SETTLED",
       rating: opts.outcome === OUTCOME.ACCEPTED ? rating : null,
       autoAccepted: opts.auto ?? false,
+      tipPaid: result.tipPaid,
       holdbackAmount: result.agentHoldback,
       holdbackUntil:
         result.agentHoldback > 0n ? new Date(Date.now() + secs(RECONCILIATION_WINDOW)) : null,
@@ -521,8 +528,9 @@ export async function finalizeJob(jobId: string, opts: FinalizeOptions) {
     }
   }
 
-  const isRejection =
-    opts.outcome === OUTCOME.PLAN_REJECTED || opts.outcome === OUTCOME.DELIVERABLE_REJECTED;
+  // Plan rejection is the only rejection left — a submitted deliverable's
+  // payout is unconditional, so there is nothing left to reject there.
+  const isRejection = opts.outcome === OUTCOME.PLAN_REJECTED;
   if (isRejection) {
     await prisma.wallet.update({
       where: { address: job.employerAddress },
@@ -534,7 +542,7 @@ export async function finalizeJob(jobId: string, opts: FinalizeOptions) {
     jobId,
     opts.outcome === OUTCOME.EXPIRED ? "EXPIRED" : "SETTLED",
     opts.actor ?? null,
-    describeOutcome(opts.outcome, opts.auto ?? false),
+    describeOutcome(opts.outcome, opts.auto ?? false, result.tipPaid),
     opts.txSig
   );
 
@@ -546,16 +554,18 @@ export async function finalizeJob(jobId: string, opts: FinalizeOptions) {
   return { job: updated, settlement: result };
 }
 
-function describeOutcome(outcome: OutcomeCode, auto: boolean): string {
+function describeOutcome(outcome: OutcomeCode, auto: boolean, tip?: bigint): string {
   switch (outcome) {
-    case OUTCOME.ACCEPTED:
-      return auto
-        ? "Review window expired; deliverable auto-accepted at a neutral rating of 5"
-        : "Employer accepted the deliverable";
+    case OUTCOME.ACCEPTED: {
+      const tipNote = tip && tip > 0n ? ` A tip of ${formatUsdc(tip)} USDC was included.` : "";
+      return (
+        (auto
+          ? "Review window expired; deliverable auto-accepted at a neutral rating of 5"
+          : "Employer accepted the deliverable") + tipNote
+      );
+    }
     case OUTCOME.PLAN_REJECTED:
       return "Employer rejected the plan. The agent keeps its planning fee and token cost; no rights to the work transfer.";
-    case OUTCOME.DELIVERABLE_REJECTED:
-      return "Employer rejected the deliverable. The agent recovers token cost and the planning fee; rejected work is not licensed.";
     case OUTCOME.EXPIRED:
       return "Timer expired. Escrow returned to the employer; any bond was slashed.";
   }
@@ -591,9 +601,7 @@ async function updateWalletReputation(
             totalValueSettled: wallet.totalValueSettled + settlement.agentImmediate + settlement.agentHoldback,
           }
         : {}),
-      ...(outcome === OUTCOME.PLAN_REJECTED || outcome === OUTCOME.DELIVERABLE_REJECTED
-        ? { jobsRejected: { increment: 1 } }
-        : {}),
+      ...(outcome === OUTCOME.PLAN_REJECTED ? { jobsRejected: { increment: 1 } } : {}),
       ...(outcome === OUTCOME.EXPIRED ? { jobsExpired: { increment: 1 } } : {}),
       chainSyncedAt: new Date(),
     },
@@ -635,7 +643,7 @@ export async function event(
  * owns the job and still hits its deadline. That is harsh for a transient
  * outage and is called out as an open item in ARCHITECTURE.md §13.
  */
-async function notifyAgent(agent: Agent, job: Job, route: "plan" | "execute" | "cancel") {
+export async function notifyAgent(agent: Agent, job: Job, route: "plan" | "execute" | "cancel") {
   const payload = {
     jobId: job.id,
     pda: job.pda,

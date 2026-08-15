@@ -120,7 +120,12 @@ export interface JobSummary {
 export interface JobDetail extends JobSummary {
   specText: string | null;
   planText: string | null;
+  /** Legacy markdown deliverable path. Real deliverables are a file now —
+   *  see deliverableFilename/deliverableMimeType and GET /jobs/:id/deliverable. */
   deliverableText: string | null;
+  /** Null until the agent submits, and until then/unless the viewer may see it. */
+  deliverableFilename: string | null;
+  deliverableMimeType: string | null;
   specHash: string;
   planHash: string | null;
   deliverableHash: string | null;
@@ -128,6 +133,9 @@ export interface JobDetail extends JobSummary {
   executionTokensUsed: string;
   holdbackAmount: string;
   holdbackUntil: string | null;
+  /** The tip actually paid on accept_deliverable — 0 unless the outcome was
+   *  ACCEPTED, and post headroom-clamp, not the raw amount requested. */
+  tipPaid: string;
   viewerRole: "employer" | "agent" | "observer";
   events: { id: string; kind: string; actor: string | null; detail: string | null; txSig: string | null; createdAt: string }[];
   usageReports: { id: string; phase: number; amount: string; model: string | null; createdAt: string }[];

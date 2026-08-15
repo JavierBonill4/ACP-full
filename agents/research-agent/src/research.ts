@@ -2,6 +2,7 @@ import { STUB_MODE, config } from "./config.js";
 import {
   PHASE_EXECUTION,
   PHASE_PLANNING,
+  PlatformError,
   directMessages,
   gatewayMessages,
   reportUsage,
@@ -77,6 +78,52 @@ export async function callModel(
       model: response.model,
     },
   };
+}
+
+/**
+ * `research()` chains two model calls: notes, then a deck built from those
+ * notes. If the first call's response has no non-empty "text" content block
+ * — a truncated or otherwise degenerate provider response, not a code bug in
+ * this file — `notes.text` silently becomes `""`, and the deck-writing call
+ * receives a prompt that ends in `Research notes:\n\n` followed by nothing.
+ * The model then does exactly what it's told to do with an empty input: it
+ * writes *about* the fact that the input is empty, which produces a deck
+ * that looks superficially like output (right slide count, right shape) but
+ * is actually the model reasoning about a blank page — not a bug in the
+ * prompt, a bug in never checking the intermediate result before spending a
+ * second call and the employer's escrow on it.
+ *
+ * This wraps callModel with a non-empty check, one retry, and a log line
+ * that captures the actual response shape when it's still empty on the
+ * second try — the concrete filter above (`type === "text" && c.text`) can
+ * silently discard blocks of an unexpected shape, and without this log
+ * there's nothing to look at if it recurs.
+ */
+async function callModelOrThrow(
+  jobId: string,
+  phase: 0 | 1,
+  request: MessagesRequest,
+  label: string
+): Promise<{ text: string; usage: { inputTokens: number; outputTokens: number; model: string } }> {
+  let last: Awaited<ReturnType<typeof callModel>> | null = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const result = await callModel(jobId, phase, request);
+    if (result.text.trim().length > 0) return result;
+    last = result;
+    console.error(
+      `[research-agent] ${label} call for job ${jobId} returned no text content ` +
+        `(attempt ${attempt}/2, model ${request.model}, max_tokens ${request.max_tokens}, ` +
+        `usage ${JSON.stringify(result.usage)}). The provider call itself did not error — its ` +
+        `response just had no usable "text" content block. If this keeps happening, log the raw ` +
+        `response.content shape here to see what block type is actually coming back.`
+    );
+  }
+  throw new PlatformError(
+    `${label} produced no content after 2 attempts — refusing to hand an empty section to the next ` +
+      `step rather than deliver a deck that talks about its own missing input`,
+    502,
+    last
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -202,28 +249,43 @@ export async function research(
   }
 
   await onProgress("Researching");
-  const notes = await callModel(jobId, PHASE_EXECUTION, {
-    model: config.RESEARCH_MODEL,
-    max_tokens: 4000,
-    system: RESEARCH_SYSTEM,
-    messages: [{ role: "user", content: `Topic: ${title}\n\nBrief:\n${spec}` }],
-  });
+  const notes = await callModelOrThrow(
+    jobId,
+    PHASE_EXECUTION,
+    {
+      model: config.RESEARCH_MODEL,
+      // Some margin over the deck call's budget: "dense, structured notes"
+      // on a real topic can run long, and this step feeds the next one —
+      // better to give it room than have it clip.
+      max_tokens: 6000,
+      thinking: { type: "disabled" },
+      system: RESEARCH_SYSTEM,
+      messages: [{ role: "user", content: `Topic: ${title}\n\nBrief:\n${spec}` }],
+    },
+    "research notes"
+  );
   totals.inputTokens += notes.usage.inputTokens;
   totals.outputTokens += notes.usage.outputTokens;
   totals.calls++;
 
   await onProgress("Building the deck");
-  const deck = await callModel(jobId, PHASE_EXECUTION, {
-    model: config.WRITE_MODEL,
-    max_tokens: 4000,
-    system: DECK_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content: `Produce ${config.DECK_SLIDES} content slides on "${title}".\n\nResearch notes:\n\n${notes.text}`,
-      },
-    ],
-  });
+  const deck = await callModelOrThrow(
+    jobId,
+    PHASE_EXECUTION,
+    {
+      model: config.WRITE_MODEL,
+      max_tokens: 4000,
+      thinking: { type: "disabled" },
+      system: DECK_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: `Produce ${config.DECK_SLIDES} content slides on "${title}".\n\nResearch notes:\n\n${notes.text}`,
+        },
+      ],
+    },
+    "deck"
+  );
   totals.inputTokens += deck.usage.inputTokens;
   totals.outputTokens += deck.usage.outputTokens;
   totals.calls++;

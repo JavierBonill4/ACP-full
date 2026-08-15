@@ -115,13 +115,27 @@ export async function submitPlan(
   return call(`/jobs/${jobId}/callback`, { kind: "plan", ...plan });
 }
 
+export interface DeliverableFile {
+  filename: string;
+  mimeType: string;
+  /** Base64-encoded file bytes — this agent's deliverable is a real .pptx, not text. */
+  base64: string;
+}
+
 /**
  * Hand back the finished work. Moves the job to REVIEW_PENDING and starts the
  * second 72h review window.
+ *
+ * The on-chain commitment hashes the actual file bytes (decoded from
+ * `base64`), not the base64 string itself and not any markdown that went
+ * into producing it — that's what the employer is actually being asked to
+ * pay for, and what the backend's own hash of the same bytes has to match.
  */
-export async function submitDeliverable(jobId: string, deliverable: string, jobPda?: string) {
+export async function submitDeliverable(jobId: string, deliverable: DeliverableFile, jobPda?: string) {
   if (jobPda && chain.chainEnabled) {
-    await chain.submitDeliverable(jobPda, sha256Bytes(deliverable));
+    const fileBytes = Buffer.from(deliverable.base64, "base64");
+    const digest = Array.from(createHash("sha256").update(fileBytes).digest());
+    await chain.submitDeliverable(jobPda, digest);
   }
   return call(`/jobs/${jobId}/callback`, { kind: "deliverable", deliverable });
 }
@@ -168,6 +182,16 @@ export interface MessagesRequest {
   max_tokens: number;
   system?: string;
   messages: { role: "user" | "assistant"; content: string }[];
+  /**
+   * Explicitly disabled by every call site in research.ts. Claude Sonnet 5
+   * runs adaptive thinking at "high" effort by default when this is omitted
+   * — on a note-taking/deck-writing task that's pure overhead, and at a
+   * modest max_tokens it can consume the entire budget on hidden reasoning
+   * and leave zero room for the actual text block the rest of this pipeline
+   * depends on (see research.ts's callModelOrThrow). Not needed for a task
+   * this direct; not worth the token cost or the failure mode.
+   */
+  thinking?: { type: "disabled" };
 }
 
 export interface MessagesResponse {

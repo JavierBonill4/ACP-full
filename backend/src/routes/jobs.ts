@@ -244,8 +244,8 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
   //
   // Every route below now requires the SAME `signature` field `/confirm`
   // does: the employer signs the matching on-chain instruction
-  // (accept_plan / reject_plan / accept_deliverable / reject_deliverable /
-  // cancel_job — see frontend/lib/transactions.ts) in the browser first,
+  // (accept_plan / reject_plan / accept_deliverable / cancel_job — see
+  // frontend/lib/transactions.ts) in the browser first,
   // THEN calls here with the confirmed signature. `assertTxSucceeded`
   // verifies it actually happened and actually touched this job's `pda`
   // before any DB state changes or reputation is written — without that,
@@ -288,7 +288,7 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/:id/accept", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const { rating, comment } = rateSchema.parse(req.body);
+    const { rating, comment, tip } = rateSchema.parse(req.body);
     const { signature } = confirmTxSchema.parse(req.body);
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return reply.code(404).send({ error: "No such job" });
@@ -298,7 +298,12 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
 
     // This is the payout transaction — the strongest reason of any route
     // here to confirm the signature actually references this job's pda
-    // before reputation and settlement get written off it.
+    // before reputation and settlement get written off it. There is no
+    // `/:id/reject` counterpart: once a deliverable is submitted, its fee +
+    // token payout is unconditional (see accept_deliverable's doc comment
+    // in lib.rs). The only decision left here is the optional tip, already
+    // validated against MAX_TIP by rateSchema and re-enforced on-chain by
+    // AcpError::TipTooHigh.
     await assertTxSucceeded(signature, job.pda ?? undefined);
 
     return serialize(
@@ -306,28 +311,7 @@ export const jobRoutes: FastifyPluginAsync = async (app) => {
         outcome: OUTCOME.ACCEPTED,
         rating,
         comment,
-        actor: req.session!.address,
-        txSig: signature,
-      })
-    );
-  });
-
-  app.post("/:id/reject", { preHandler: requireAuth }, async (req, reply) => {
-    const { id } = idParam.parse(req.params);
-    const { signature } = confirmTxSchema.parse(req.body);
-    const job = await prisma.job.findUnique({ where: { id } });
-    if (!job) return reply.code(404).send({ error: "No such job" });
-    if (job.employerAddress !== req.session!.address) {
-      return reply.code(403).send({ error: "Not your job" });
-    }
-
-    await assertTxSucceeded(signature, job.pda ?? undefined);
-
-    // Rejected work is not licensed. The employer receives no rights to it —
-    // this has to be in the ToS and in the rejection UI, not just here.
-    return serialize(
-      await finalizeJob(id, {
-        outcome: OUTCOME.DELIVERABLE_REJECTED,
+        tip,
         actor: req.session!.address,
         txSig: signature,
       })

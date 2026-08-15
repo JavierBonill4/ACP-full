@@ -327,9 +327,14 @@ async function main() {
     .rpc();
 
   // -- settle --------------------------------------------------------------
-  step("accept_deliverable (rating 9) — this is the payout");
+  // There is no reject_deliverable — a submitted deliverable's fee + token
+  // payout is unconditional. The only decision left to the employer is an
+  // optional tip (0..0.10 USDC), drawn from their own unused-escrow refund,
+  // not funded on top of it. Demo with the UI's default of 0.05 USDC.
+  const DEFAULT_TIP = usdc(0.05);
+  step(`accept_deliverable (rating 9, tip ${fmtUsdc(DEFAULT_TIP)} USDC) — this is the payout`);
   await program.methods
-    .acceptDeliverable(9)
+    .acceptDeliverable(9, DEFAULT_TIP)
     .accounts({
       actor: employer.publicKey,
       oracleConfig: oracleConfigPda,
@@ -375,20 +380,21 @@ async function main() {
     // employer would show the full ~11.5 loss.
     console.log(
       `\n  Expected (employer == agent here): escrow (16.5) minus employer's\n` +
-        `  own payout (11.445) minus refund (5.0) leaves the treasury's 1%-of-\n` +
-        `  fee cut (0.055) as the only USDC that actually left this wallet.\n` +
+        `  own payout (11.495, including the 0.05 tip) minus refund (4.95)\n` +
+        `  leaves the treasury's 1%-of-fee cut (0.055) as the only USDC that\n` +
+        `  actually left this wallet.\n` +
         `  Re-run with AGENT_KEYPAIR_PATH pointed at a separate keypair to see\n` +
-        `  the full employer-loses-~11.5 / agent-gains-~11.445 split instead.\n` +
+        `  the full employer-loses-~11.55 / agent-gains-~11.495 split instead.\n` +
         `  If the numbers above line up, the mechanics are sound.\n`
     );
   } else {
     console.log(
-      `\n  Expected: agent receives 6 tokens + 5.5 fees, minus 1% of the FEE\n` +
-        `  portion only (0.055) — ~11.445 USDC. Employer funded 16.5, gets 5.0\n` +
-        `  back (1 unused planning-token cap + 4 unused execution budget — both\n` +
-        `  fees were bid at their full ceiling, so neither refunds), netting a\n` +
-        `  real loss of 11.5 USDC. If those numbers line up, the mechanics are\n` +
-        `  sound.\n`
+      `\n  Expected: agent receives 6 tokens + 5.5 fees + 0.05 tip, minus 1%\n` +
+        `  of the FEE portion only (0.055) — ~11.495 USDC. Employer funded\n` +
+        `  16.5, gets 4.95 back (1 unused planning-token cap + 4 unused\n` +
+        `  execution budget minus the 0.05 tip — both fees were bid at their\n` +
+        `  full ceiling, so neither refunds), netting a real loss of 11.55\n` +
+        `  USDC. If those numbers line up, the mechanics are sound.\n`
     );
   }
 }

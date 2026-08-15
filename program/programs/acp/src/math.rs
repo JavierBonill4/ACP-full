@@ -34,6 +34,11 @@ pub struct Settlement {
     pub protocol_fee: u64,
     /// Everything else back to whoever funded escrow.
     pub employer_refund: u64,
+    /// The tip actually paid, after outcome-gating and headroom clamping —
+    /// already folded into `agent_immediate` above; broken out here purely
+    /// so callers (the `JobSettled` event) can report the real number
+    /// instead of the raw, possibly-clamped request.
+    pub tip_paid: u64,
 }
 
 impl Settlement {
@@ -52,6 +57,21 @@ impl Settlement {
 /// oracle-reported and already clamped to their caps at write time; they are
 /// clamped again here because a compromised oracle must not be able to pay out
 /// more than the employer funded.
+///
+/// A completed deliverable's fee + token payout is unconditional now — there
+/// is no `DeliverableRejected` row. `tip` is the employer's optional bonus on
+/// acceptance (0 unless `outcome == Accepted`; forced to 0 for every other
+/// outcome regardless of what's passed in, so a caller bug elsewhere can't
+/// pay a tip on a rejection or expiry). It adds to the agent's payout and
+/// subtracts from the employer's refund — it is drawn from unused escrow, not
+/// funded on top of it, and clamped to whatever headroom is actually left
+/// once fees and token reimbursement are accounted for, the same way token
+/// usage is clamped to its cap just above. Without that clamp, a tip
+/// requested against a job that used 100% of every cap would ask this
+/// function to distribute more than `escrow_total` — the transfer would
+/// still fail safely on-chain (the vault genuinely doesn't hold it), but
+/// silently shrinking the tip to what's actually available is better
+/// behavior than failing the whole acceptance over a few cents.
 pub fn settle(
     outcome: Outcome,
     tier: u8,
@@ -63,40 +83,52 @@ pub fn settle(
     planning_tokens_used: u64,
     execution_tokens_used: u64,
     protocol_fee_bps: u16,
+    tip: u64,
 ) -> Settlement {
     let planning_tokens = planning_tokens_used.min(planning_token_cap);
     let execution_tokens = execution_tokens_used.min(token_budget_cap);
 
     // Which fees are earned, and which tokens are reimbursed.
     //
-    // Rejection leaves the agent whole on real cost, not on profit: every
-    // token burned is recovered and the planning fee is kept; only the
-    // completion fee is forfeited. The employer still pays real token cost, so
-    // rejecting is cheaper than accepting but not free.
+    // A rejected plan leaves the agent whole on real cost, not on profit:
+    // every planning token burned is recovered and the planning fee is kept.
+    // The employer still pays real token cost, so rejecting is cheaper than
+    // accepting but not free.
     let (fee_earned, tokens_earned) = match outcome {
         Outcome::Accepted => (
             planning_fee.saturating_add(fixed_fee),
             planning_tokens.saturating_add(execution_tokens),
         ),
         Outcome::PlanRejected => (planning_fee, planning_tokens),
-        Outcome::DeliverableRejected => (
-            planning_fee,
-            planning_tokens.saturating_add(execution_tokens),
-        ),
         // Deadline missed or abandoned: agent eats token cost and the bond.
         // This is what makes claiming a job non-free.
         Outcome::Expired => (0, 0),
     };
 
-    // 1% of margin, never of gross. Token reimbursement is pass-through cost,
-    // not revenue, so it is excluded from the fee base.
+    let tip = if matches!(outcome, Outcome::Accepted) { tip } else { 0 };
+
+    // 1% of margin, never of gross, and never of the tip — the tip is the
+    // employer's own money moving straight to the agent, not protocol
+    // revenue. Token reimbursement is pass-through cost and excluded from
+    // the fee base the same way.
     let protocol_fee = mul_bps(fee_earned, protocol_fee_bps);
     let fee_net = fee_earned.saturating_sub(protocol_fee);
 
+    // What's left in escrow before the tip is even considered — clamp to
+    // this rather than to the requested tip, so a tip can never make this
+    // function claim to distribute more than escrow_total holds.
+    let headroom = escrow_total.saturating_sub(
+        fee_net.saturating_add(tokens_earned).saturating_add(protocol_fee),
+    );
+    let tip = tip.min(headroom);
+
     let (agent_immediate, agent_holdback) = if tier_has_holdback(tier) {
-        (fee_net, tokens_earned)
+        // The tip is a discretionary, in-the-same-transaction decision the
+        // employer just made — nothing to reconcile later, unlike token
+        // usage — so it is never held back, even for tier 1.
+        (fee_net.saturating_add(tip), tokens_earned)
     } else {
-        (fee_net.saturating_add(tokens_earned), 0)
+        (fee_net.saturating_add(tokens_earned).saturating_add(tip), 0)
     };
 
     let paid_out = agent_immediate
@@ -109,6 +141,7 @@ pub fn settle(
         agent_holdback,
         protocol_fee,
         employer_refund,
+        tip_paid: tip,
     }
 }
 
@@ -140,7 +173,7 @@ pub fn value_weight(value_base_units: u64) -> u64 {
 pub fn outcome_rating_delta(outcome: Outcome, rating: u8) -> i64 {
     match outcome {
         Outcome::Accepted => (rating.min(10) as i64) - NEUTRAL_RATING,
-        Outcome::PlanRejected | Outcome::DeliverableRejected => -2,
+        Outcome::PlanRejected => -2,
         Outcome::Expired => -5,
     }
 }
@@ -216,6 +249,7 @@ mod tests {
             1_500_000,
             30_000_000,
             FEE_BPS,
+            0,
         );
         // fee base = 22 USDC, 1% = 0.22 USDC
         assert_eq!(s.protocol_fee, 220_000);
@@ -240,6 +274,7 @@ mod tests {
             0,
             900_000_000,
             FEE_BPS,
+            0,
         );
         assert_eq!(s.protocol_fee, 100_000); // 1% of 10 USDC, not of 910
     }
@@ -258,6 +293,7 @@ mod tests {
             2_500_000,
             0,
             FEE_BPS,
+            0,
         );
         assert_eq!(s.protocol_fee, 20_000);
         assert_eq!(s.agent_immediate, 2_000_000 - 20_000 + 2_500_000);
@@ -265,24 +301,64 @@ mod tests {
     }
 
     #[test]
-    fn deliverable_rejection_returns_every_token_burned() {
+    fn accepted_pays_the_tip_on_top_and_takes_it_from_the_refund() {
+        let total = escrow(2_000_000, 20_000_000, 3_000_000, 50_000_000);
+        let without_tip = settle(
+            Outcome::Accepted, TIER_METERED, total, 2_000_000, 20_000_000, 3_000_000,
+            50_000_000, 1_500_000, 30_000_000, FEE_BPS, 0,
+        );
+        let with_tip = settle(
+            Outcome::Accepted, TIER_METERED, total, 2_000_000, 20_000_000, 3_000_000,
+            50_000_000, 1_500_000, 30_000_000, FEE_BPS, MAX_TIP,
+        );
+        assert_eq!(with_tip.agent_immediate, without_tip.agent_immediate + MAX_TIP);
+        assert_eq!(with_tip.employer_refund, without_tip.employer_refund - MAX_TIP);
+        // the tip is the employer's own money, not margin — no protocol cut of it
+        assert_eq!(with_tip.protocol_fee, without_tip.protocol_fee);
+        assert_eq!(with_tip.tip_paid, MAX_TIP);
+        assert_eq!(without_tip.tip_paid, 0);
+        assert_eq!(with_tip.total(), total);
+    }
+
+    #[test]
+    fn tip_paid_reflects_the_headroom_clamp_not_the_raw_request() {
+        // pt/et at their caps: fees + full token reimbursement already
+        // exhaust escrow, so there is no headroom left for any tip at all.
         let total = escrow(2_000_000, 20_000_000, 3_000_000, 50_000_000);
         let s = settle(
-            Outcome::DeliverableRejected,
-            TIER_METERED,
-            total,
-            2_000_000,
-            20_000_000,
-            3_000_000,
-            50_000_000,
-            3_000_000,
-            48_000_000,
-            FEE_BPS,
+            Outcome::Accepted, TIER_METERED, total, 2_000_000, 20_000_000, 3_000_000,
+            50_000_000, 3_000_000, 50_000_000, FEE_BPS, MAX_TIP,
         );
-        // planning fee kept, completion fee forfeited, all tokens recovered
-        assert_eq!(s.agent_immediate, 2_000_000 - 20_000 + 51_000_000);
-        // employer gets the completion fee back plus unused budget
-        assert_eq!(s.employer_refund, 20_000_000 + 2_000_000);
+        assert_eq!(s.tip_paid, 0, "no headroom left, so the clamped tip must be 0");
+        assert_eq!(s.total(), total);
+    }
+
+    #[test]
+    fn tip_is_ignored_on_every_outcome_but_accepted() {
+        let total = escrow(2_000_000, 20_000_000, 3_000_000, 50_000_000);
+        for outcome in [Outcome::PlanRejected, Outcome::Expired] {
+            let without_tip = settle(
+                outcome, TIER_METERED, total, 2_000_000, 20_000_000, 3_000_000,
+                50_000_000, 2_500_000, 0, FEE_BPS, 0,
+            );
+            let with_tip_arg = settle(
+                outcome, TIER_METERED, total, 2_000_000, 20_000_000, 3_000_000,
+                50_000_000, 2_500_000, 0, FEE_BPS, MAX_TIP,
+            );
+            assert_eq!(with_tip_arg, without_tip, "tip leaked into {:?}", outcome);
+        }
+    }
+
+    #[test]
+    fn tier1_tip_is_never_held_back() {
+        let total = escrow(1_000_000, 10_000_000, 2_000_000, 40_000_000);
+        let s = settle(
+            Outcome::Accepted, TIER_RECONCILED, total, 1_000_000, 10_000_000, 2_000_000,
+            40_000_000, 2_000_000, 18_000_000, FEE_BPS, MAX_TIP,
+        );
+        // fees net + tip, immediately; only token reimbursement is held back
+        assert_eq!(s.agent_immediate, 11_000_000 - 110_000 + MAX_TIP);
+        assert_eq!(s.agent_holdback, 20_000_000);
         assert_eq!(s.total(), total);
     }
 
@@ -300,6 +376,7 @@ mod tests {
             3_000_000,
             50_000_000,
             FEE_BPS,
+            0,
         );
         assert_eq!(s.agent_immediate, 0);
         assert_eq!(s.agent_holdback, 0);
@@ -321,6 +398,7 @@ mod tests {
             2_000_000,
             18_000_000,
             FEE_BPS,
+            0,
         );
         assert_eq!(s.agent_immediate, 11_000_000 - 110_000);
         assert_eq!(s.agent_holdback, 20_000_000);
@@ -341,6 +419,7 @@ mod tests {
             u64::MAX, // lying oracle
             u64::MAX,
             FEE_BPS,
+            0,
         );
         assert_eq!(s.total(), total);
         assert!(s.agent_immediate <= total);
@@ -358,7 +437,7 @@ mod tests {
     fn wrs_floors_at_zero() {
         let mut wrs = 0u64;
         for _ in 0..11 {
-            wrs = apply_wrs(wrs, Outcome::DeliverableRejected, 0, 50_000_000);
+            wrs = apply_wrs(wrs, Outcome::PlanRejected, 0, 50_000_000);
         }
         assert_eq!(wrs, 0);
     }
@@ -380,22 +459,23 @@ mod tests {
 
     #[test]
     fn conservation_holds_across_the_whole_matrix() {
-        let outcomes = [
-            Outcome::Accepted,
-            Outcome::PlanRejected,
-            Outcome::DeliverableRejected,
-            Outcome::Expired,
-        ];
+        let outcomes = [Outcome::Accepted, Outcome::PlanRejected, Outcome::Expired];
         for tier in [TIER_RECONCILED, TIER_METERED] {
             for o in outcomes {
                 for pt in [0u64, 500_000, 3_000_000] {
                     for et in [0u64, 25_000_000, 50_000_000] {
-                        let total = escrow(2_000_000, 20_000_000, 3_000_000, 50_000_000);
-                        let s = settle(
-                            o, tier, total, 2_000_000, 20_000_000, 3_000_000, 50_000_000,
-                            pt, et, FEE_BPS,
-                        );
-                        assert_eq!(s.total(), total, "conservation broke for {:?}", o);
+                        // A tip has nowhere left to come from once fees +
+                        // tokens already exhaust escrow (pt/et at their
+                        // caps) — conservation still has to hold (refund
+                        // saturates at zero) rather than overpay the agent.
+                        for tip in [0u64, DEFAULT_TIP, MAX_TIP] {
+                            let total = escrow(2_000_000, 20_000_000, 3_000_000, 50_000_000);
+                            let s = settle(
+                                o, tier, total, 2_000_000, 20_000_000, 3_000_000, 50_000_000,
+                                pt, et, FEE_BPS, tip,
+                            );
+                            assert_eq!(s.total(), total, "conservation broke for {:?} tip={}", o, tip);
+                        }
                     }
                 }
             }

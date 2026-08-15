@@ -21,18 +21,20 @@ export declare const MAX_TIER: 2;
 export declare const TIER1_VALUE_CAP: bigint;
 export declare const TIER2_VALUE_CAP: bigint;
 
+export declare const MAX_TIP: bigint;
+export declare const DEFAULT_TIP: bigint;
+
 export declare const WRS_SCALE: bigint;
 export declare const DECAY_NUM: bigint;
 export declare const DECAY_DEN: bigint;
 export declare const RATING_STEP: bigint;
 export declare const NEUTRAL_RATING: bigint;
 
-export type OutcomeCode = 0 | 1 | 2 | 3;
+export type OutcomeCode = 0 | 1 | 2;
 export declare const OUTCOME: {
   readonly ACCEPTED: 0;
   readonly PLAN_REJECTED: 1;
-  readonly DELIVERABLE_REJECTED: 2;
-  readonly EXPIRED: 3;
+  readonly EXPIRED: 2;
 };
 
 export type JobTypeCode = 0 | 1;
@@ -55,6 +57,8 @@ export interface Settlement {
   agentHoldback: bigint;
   protocolFee: bigint;
   employerRefund: bigint;
+  /** The tip actually paid, after outcome-gating and headroom clamping. */
+  tipPaid: bigint;
 }
 
 export interface SettleInput {
@@ -68,6 +72,8 @@ export interface SettleInput {
   planningTokensUsed: bigint;
   executionTokensUsed: bigint;
   protocolFeeBps?: bigint;
+  /** 0..MAX_TIP base units. Ignored (forced to 0) unless outcome is ACCEPTED. */
+  tip?: bigint;
 }
 
 export interface EscrowCaps {

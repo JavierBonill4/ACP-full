@@ -660,67 +660,12 @@
         {
           "name": "rating",
           "type": "u8"
+        },
+        {
+          "name": "tip",
+          "type": "u64"
         }
       ]
-    },
-    {
-      "name": "reject_deliverable",
-      "discriminator": [
-        79,
-        39,
-        42,
-        174,
-        74,
-        211,
-        205,
-        193
-      ],
-      "accounts": [
-        {
-          "name": "actor",
-          "signer": true
-        },
-        {
-          "name": "oracle_config"
-        },
-        {
-          "name": "job",
-          "writable": true
-        },
-        {
-          "name": "vault",
-          "writable": true
-        },
-        {
-          "name": "bond_vault",
-          "writable": true
-        },
-        {
-          "name": "employer_profile",
-          "writable": true
-        },
-        {
-          "name": "wallet_profile",
-          "writable": true
-        },
-        {
-          "name": "employer_token",
-          "writable": true
-        },
-        {
-          "name": "agent_token",
-          "writable": true
-        },
-        {
-          "name": "treasury_token",
-          "writable": true
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        }
-      ],
-      "args": []
     },
     {
       "name": "auto_accept",
@@ -1260,21 +1205,26 @@
     },
     {
       "code": 6021,
+      "name": "TipTooHigh",
+      "msg": "Tip exceeds the maximum"
+    },
+    {
+      "code": 6022,
       "name": "ZeroEscrow",
       "msg": "Escrow amounts must be non-zero"
     },
     {
-      "code": 6022,
+      "code": 6023,
       "name": "WrongMint",
       "msg": "Token account mint does not match the configured USDC mint"
     },
     {
-      "code": 6023,
+      "code": 6024,
       "name": "WrongTokenOwner",
       "msg": "Token account owner does not match the expected party"
     },
     {
-      "code": 6024,
+      "code": 6025,
       "name": "Overflow",
       "msg": "Arithmetic overflow"
     }
@@ -1750,6 +1700,10 @@
           {
             "name": "rating",
             "type": "u8"
+          },
+          {
+            "name": "tip",
+            "type": "u64"
           }
         ]
       }

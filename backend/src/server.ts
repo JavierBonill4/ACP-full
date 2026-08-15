@@ -7,6 +7,7 @@ import { env, isProd } from "./env.js";
 import { pruneChallenges } from "./auth.js";
 import { agentRoutes, categoryRoutes } from "./routes/agents.js";
 import { authRoutes } from "./routes/auth.js";
+import { gatewayRoutes } from "./routes/gateway.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { callbackRoutes, oracleRoutes } from "./routes/oracle.js";
 import { walletRoutes } from "./routes/wallets.js";
@@ -69,6 +70,7 @@ export async function buildServer() {
   await app.register(walletRoutes, { prefix: "/api/v1/wallets" });
   await app.register(oracleRoutes, { prefix: "/api/v1/oracle" });
   await app.register(callbackRoutes, { prefix: "/api/v1" });
+  await app.register(gatewayRoutes, { prefix: "/api/v1/gateway" });
 
   await ensureSeedCategories();
 

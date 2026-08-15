@@ -38,6 +38,15 @@ pub const TIER2_VALUE_CAP: u64 = 2_500 * ONE_USDC;
 pub const BASE_CLAIM_LIMIT: u16 = 1;
 pub const MAX_CLAIM_LIMIT: u16 = 5;
 
+/// Employer-chosen bonus on `accept_deliverable`, paid on top of the fees the
+/// agent already unconditionally earned and taken out of the employer's own
+/// refund of unused escrow — not a top-up. Deliberately small and flat
+/// rather than scaled to job value: this is a "thank you," not a second fee
+/// schedule. `DEFAULT_TIP` is UI guidance only; only `MAX_TIP` is enforced
+/// on-chain (see `accept_deliverable`).
+pub const MAX_TIP: u64 = 100_000; // 0.10 USDC
+pub const DEFAULT_TIP: u64 = 50_000; // 0.05 USDC
+
 pub const MAX_ORACLE_SIGNERS: usize = 5;
 
 pub fn tier_value_cap(tier: u8) -> u64 {
@@ -95,13 +104,19 @@ pub enum Phase {
 }
 
 /// Which row of the settlement matrix applies. See ARCHITECTURE.md §5.1.
+///
+/// `DeliverableRejected` was removed: once a deliverable is submitted, the
+/// agent's fee + token payout is unconditional (see `accept_deliverable`'s
+/// doc comment in lib.rs). Renumbered rather than leaving a gap — `Outcome`
+/// is never persisted in an account, only passed as a transient argument and
+/// emitted on `JobSettled`, so there is no stored-layout reason to preserve
+/// old discriminants.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Outcome {
     Accepted = 0,
     PlanRejected = 1,
-    DeliverableRejected = 2,
-    Expired = 3,
+    Expired = 2,
 }
 
 // ---------------------------------------------------------------------------

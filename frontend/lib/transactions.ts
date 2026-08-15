@@ -21,12 +21,17 @@ import {
  * against a real deployed program, with matching balance deltas:
  *   postJob, acceptPlan, acceptDeliverable
  *
+ * There is no rejectDeliverable — once a deliverable is submitted, its fee +
+ * token payout is unconditional (see accept_deliverable's doc comment in
+ * lib.rs). acceptDeliverable now takes an optional tip, drawn from the
+ * employer's own unused-escrow refund and clamped on-chain to MAX_TIP.
+ *
  * BEST-EFFORT, NOT YET EXERCISED — built by inferring account shape from the
  * proven instructions above (Finalize's account set is shared across every
  * terminal outcome per lib.rs's design) and from instruction naming. These
  * are the first thing to check against a real error if one of these calls
  * fails with an Anchor account-resolution or arg-count error:
- *   rejectPlan, rejectDeliverable, cancelJob
+ *   rejectPlan, cancelJob
  * If lib.rs's account struct or instruction args differ from what's built
  * here, Anchor will throw a specific, readable error naming the mismatch —
  * paste it back and this gets corrected precisely rather than re-guessed.
@@ -223,15 +228,22 @@ export async function acceptPlan(ctx: AcpCtx, job: PublicKey): Promise<{ signatu
   return { signature };
 }
 
-/** Employer approves the delivered work — this is the payout transaction. */
+/**
+ * Employer approves the delivered work — this is the payout transaction.
+ * `tipUsdc` is 0..0.10 USDC (DEFAULT_TIP is 0.05), drawn from the employer's
+ * own unused-escrow refund, not funded on top of it. The program clamps it
+ * to whatever headroom is actually left (AcpError::TipTooHigh only rejects
+ * requests above MAX_TIP itself, not ones that merely exceed headroom).
+ */
 export async function acceptDeliverable(
   ctx: AcpCtx,
   job: PublicKey,
-  rating: number
+  rating: number,
+  tipUsdc = 0
 ): Promise<{ signature: string }> {
   const c = await loadJobContext(ctx, job);
   const signature = await ctx.program.methods
-    .acceptDeliverable(rating)
+    .acceptDeliverable(rating, usdc(tipUsdc))
     .accounts({
       actor: ctx.publicKey,
       oracleConfig: oracleConfigPda(),
@@ -255,28 +267,21 @@ export async function acceptDeliverable(
 // BEST-EFFORT — see file header
 // ---------------------------------------------------------------------------
 
-/** Employer rejects the plan, sending the agent back to re-propose (or the job to expire on claim_ttl). */
-export async function rejectPlan(
-  ctx: AcpCtx,
-  job: PublicKey,
-  reason = ""
-): Promise<{ signature: string }> {
-  const signature = await ctx.program.methods
-    .rejectPlan(reason)
-    .accounts({ employer: ctx.publicKey, job })
-    .rpc();
-  return { signature };
-}
-
-/** Employer rejects the delivered work. Assumed to route through the same shared Finalize as acceptDeliverable. */
-export async function rejectDeliverable(
-  ctx: AcpCtx,
-  job: PublicKey,
-  reason = ""
-): Promise<{ signature: string }> {
+/**
+ * Employer rejects the plan, settling the job now: the agent keeps its
+ * planning fee and recovers its planning tokens, everything else returns.
+ *
+ * `reject_plan` takes no arguments on-chain (`pub fn reject_plan(ctx:
+ * Context<Finalize>)` — lib.rs) and, like every other terminal transition,
+ * needs the full `Finalize` account set, not just `{employer, job}`. The
+ * previous version of this function guessed both wrong — Anchor's "provided
+ * too many arguments" error is what that guess actually looks like at
+ * runtime, not a sign anything on-chain changed.
+ */
+export async function rejectPlan(ctx: AcpCtx, job: PublicKey): Promise<{ signature: string }> {
   const c = await loadJobContext(ctx, job);
   const signature = await ctx.program.methods
-    .rejectDeliverable(reason)
+    .rejectPlan()
     .accounts({
       actor: ctx.publicKey,
       oracleConfig: oracleConfigPda(),

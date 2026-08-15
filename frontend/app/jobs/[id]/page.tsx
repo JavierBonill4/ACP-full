@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 
-import SlideDeck from "@/components/SlideDeck";
+import DeliverableFile from "@/components/DeliverableFile";
 import { AddressLink, Badge, Button, Field, TrustNotice, Window, cx, inputClass } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
 import { STATE_LABEL, STATE_TONE, relativeTime, usdc } from "@/lib/format";
@@ -15,10 +15,26 @@ import {
   acceptDeliverable as chainAcceptDeliverable,
   acceptPlan as chainAcceptPlan,
   cancelJob as chainCancelJob,
-  rejectDeliverable as chainRejectDeliverable,
   rejectPlan as chainRejectPlan,
 } from "@/lib/transactions";
 import type { JobDetail } from "@/lib/types";
+
+/** 0.05 USDC — matches DEFAULT_TIP in program/programs/acp/src/state.rs. Only
+ *  MAX_TIP (0.10) is enforced on-chain; this is UI guidance. */
+const DEFAULT_TIP_USDC = 0.05;
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // "data:<mime>;base64,<payload>" — strip the prefix.
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 /**
  * Job detail and the lifecycle action panel.
@@ -35,6 +51,12 @@ import type { JobDetail } from "@/lib/types";
  * agent's own backend keypair (agents/research-agent/src/chain.ts), not a
  * browser wallet, and the backend does not require a signature on those
  * routes yet.
+ *
+ * There is no reject-deliverable action anywhere in this panel — once a
+ * deliverable is submitted, its fee + token payout is unconditional (see
+ * accept_deliverable's doc comment in lib.rs). The only decision left at
+ * REVIEW_PENDING is a rating (reputation only, no bearing on payout) and an
+ * optional tip.
  */
 export default function JobPage() {
   const { id } = useParams<{ id: string }>();
@@ -127,8 +149,12 @@ export default function JobPage() {
 
       {job.specText && <TextPanel title="Specification" hash={job.specHash} body={job.specText} />}
       {job.planText && <TextPanel title="Plan" hash={job.planHash} body={job.planText} />}
-      {job.deliverableText ? (
-        <SlideDeck markdown={job.deliverableText} />
+      {job.deliverableFilename ? (
+        <DeliverableFile jobId={job.id} filename={job.deliverableFilename} mimeType={job.deliverableMimeType} />
+      ) : job.deliverableText ? (
+        // Legacy markdown deliverables from before the pptx pipeline. Shown
+        // as plain text rather than rendered — SlideDeck is retired.
+        <TextPanel title="Deliverable (legacy text)" hash={job.deliverableHash} body={job.deliverableText} />
       ) : (
         <p className="text-sm text-neutral-500">No deliverable yet.</p>
       )}
@@ -156,8 +182,10 @@ function ActionPanel({
   const [outline, setOutline] = useState("");
   const [planningFee, setPlanningFee] = useState("0");
   const [fixedFee, setFixedFee] = useState("");
-  const [deliverable, setDeliverable] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [rating, setRating] = useState(8);
+  const [tip, setTip] = useState(DEFAULT_TIP_USDC);
 
   if (!isEmployer && !isAgent) return null;
 
@@ -280,7 +308,9 @@ function ActionPanel({
         {chainHint && <p className="text-[11px] leading-relaxed text-warn">{chainHint}</p>}
         <p className="text-[11px] leading-relaxed text-white/30">
           Rejecting settles the job now: the agent keeps its planning fee and recovers its planning
-          tokens, and you get everything else back. You receive no rights to the work.
+          tokens, and you get everything else back. You receive no rights to the work. This is the
+          only reject left in the lifecycle — once a deliverable is submitted, it settles
+          unconditionally.
         </p>
       </>
     );
@@ -289,14 +319,41 @@ function ActionPanel({
   if (isAgent && job.state === "IN_PROGRESS") {
     return box(
       <>
-        <Field label="Deliverable">
-          <textarea
-            className={`${inputClass} min-h-[140px] font-mono text-xs`}
-            value={deliverable}
-            onChange={(e) => setDeliverable(e.target.value)}
+        <Field label="Deliverable file">
+          <input
+            type="file"
+            className={`${inputClass} file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-xs file:text-white/80`}
+            onChange={(e) => {
+              setFileError(null);
+              setFile(e.target.files?.[0] ?? null);
+            }}
           />
         </Field>
-        <Button disabled={busy} onClick={() => act(() => api.submitDeliverable(job.id, deliverable))}>
+        {file && (
+          <p className="text-[11px] text-white/40">
+            {file.name} · {(file.size / 1024).toFixed(1)} KB
+          </p>
+        )}
+        {fileError && <p className="text-[11px] text-bad">{fileError}</p>}
+        <Button
+          disabled={busy || !file}
+          onClick={() =>
+            act(async () => {
+              if (!file) return;
+              try {
+                const base64 = await fileToBase64(file);
+                await api.submitDeliverable(job.id, {
+                  filename: file.name,
+                  mimeType: file.type || "application/octet-stream",
+                  base64,
+                });
+              } catch (e) {
+                setFileError(e instanceof Error ? e.message : "Could not read that file");
+                throw e;
+              }
+            })
+          }
+        >
           Submit deliverable
         </Button>
       </>
@@ -319,38 +376,36 @@ function ActionPanel({
         <p className="text-[11px] leading-relaxed text-white/30">
           A 5 leaves the agent&apos;s reputation where it was; above raises it, below lowers it.
           Auto-accepts award a 5, so a rating is only worth giving if you actually read the work.
+          Rating is a reputation signal only — it has no bearing on payout.
         </p>
-        <div className="flex gap-2">
-          <Button
-            disabled={busy || !chainReady}
-            onClick={() =>
-              act(async () => {
-                const { signature } = await chainAcceptDeliverable(ctx!, jobPda(), rating);
-                await api.accept(job.id, rating, { signature });
-              })
-            }
-          >
-            Accept and pay
-          </Button>
-          <Button
-            variant="danger"
-            disabled={busy || !chainReady}
-            onClick={() =>
-              act(async () => {
-                const { signature } = await chainRejectDeliverable(ctx!, jobPda());
-                await api.reject(job.id, { signature });
-              })
-            }
-          >
-            Reject
-          </Button>
-        </div>
-        {chainHint && <p className="text-[11px] leading-relaxed text-warn">{chainHint}</p>}
+        <Field label={`Tip — ${tip.toFixed(2)} USDC`} hint="0.00 – 0.10 USDC, from your own refund">
+          <input
+            type="range"
+            min={0}
+            max={0.1}
+            step={0.01}
+            value={tip}
+            onChange={(e) => setTip(Number(e.target.value))}
+            className="w-full accent-accent"
+          />
+        </Field>
         <p className="text-[11px] leading-relaxed text-white/30">
-          Rejecting returns the completion fee and unused budget to you. The agent still recovers
-          every token it burned and keeps its planning fee — and{" "}
-          <span className="text-white/50">you receive no license to the rejected work.</span>
+          The agent&apos;s planning fee, completion fee, and every token it used are paid
+          unconditionally — there is nothing left to reject. A tip comes out of your own unused
+          escrow, not on top of it, and is clamped on-chain to whatever is actually left over.
         </p>
+        <Button
+          disabled={busy || !chainReady}
+          onClick={() =>
+            act(async () => {
+              const { signature } = await chainAcceptDeliverable(ctx!, jobPda(), rating, tip);
+              await api.accept(job.id, rating, { signature, tipUsdc: tip });
+            })
+          }
+        >
+          Accept and pay
+        </Button>
+        {chainHint && <p className="text-[11px] leading-relaxed text-warn">{chainHint}</p>}
       </>
     );
   }
@@ -402,6 +457,8 @@ function Money({ job, escrow }: { job: JobDetail; escrow: bigint }) {
       `${usdc(job.holdbackAmount)} USDC`,
       `Tier 1 token reimbursement, released ${relativeTime(job.holdbackUntil)}.`,
     ]);
+  if (job.tipPaid && job.tipPaid !== "0")
+    rows.push(["Tip paid", `${usdc(job.tipPaid)} USDC`, "Drawn from the employer's own refund, on acceptance."]);
 
   return (
     <Window title="Money">

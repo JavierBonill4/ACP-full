@@ -260,7 +260,7 @@ describe("acp v4", () => {
       .accounts({ agent: agent.publicKey, job }).signers([agent]).rpc();
 
     const treasuryBefore = (await getAccount(conn, treasuryAta)).amount;
-    await program.methods.acceptDeliverable(9)
+    await program.methods.acceptDeliverable(9, new BN(0))
       .accounts(finalizeAccounts(job, employer.publicKey)).signers([employer]).rpc();
 
     const treasuryAfter = (await getAccount(conn, treasuryAta)).amount;
@@ -320,7 +320,17 @@ describe("acp v4", () => {
     }
   });
 
-  it("leaves the agent whole on real cost when a deliverable is rejected", async () => {
+  it("has no reject_deliverable — a submitted deliverable's payout is unconditional", async () => {
+    // There is no reject_deliverable instruction left on the program at
+    // all; calling it must fail at the client layer before ever reaching
+    // the validator, since the IDL no longer declares it.
+    assert.isUndefined(
+      (program.methods as any).rejectDeliverable,
+      "reject_deliverable must not exist on the program"
+    );
+  });
+
+  it("pays the agent in full plus a tip, drawn from the employer's own refund", async () => {
     const job = await postJob({ type: JOB_TYPE_OPEN });
     await program.methods.claimJob().accounts({
       agent: agent.publicKey, oracleConfig, job, walletProfile,
@@ -339,15 +349,46 @@ describe("acp v4", () => {
       .accounts({ agent: agent.publicKey, job }).signers([agent]).rpc();
 
     const before = (await getAccount(conn, agentAta)).amount;
-    await program.methods.rejectDeliverable()
+    const tip = USDC(0.05); // the UI's DEFAULT_TIP
+    await program.methods.acceptDeliverable(9, tip)
       .accounts(finalizeAccounts(job, employer.publicKey)).signers([employer]).rpc();
     const after = (await getAccount(conn, agentAta)).amount;
 
-    // planning fee (2, less 1%) + all 51 tokens + bond returned (5)
-    assert.equal((after - before).toString(), (2_000_000 - 20_000 + 51_000_000 + 5_000_000).toString());
+    // planning fee (2) + fixed fee (20), less 1% of that 22 margin, + all 51
+    // tokens + the 0.05 tip + bond returned (5)
+    const expected = (22_000_000 - 220_000) + 51_000_000 + 50_000 + 5_000_000;
+    assert.equal((after - before).toString(), expected.toString());
 
-    const ep = await program.account.employerProfile.fetch(employerProfile);
-    assert.isAbove(ep.jobsRejected.toNumber(), 0, "rejection is published on the employer profile");
+    const j = await program.account.job.fetch(job);
+    assert.equal(j.state, STATE.SETTLED);
+  });
+
+  it("clamps the tip to whatever headroom is left once fees and tokens exhaust escrow", async () => {
+    // A job sized so planning+fixed fee and full token usage leave almost
+    // nothing over — MAX_TIP (0.10) requested against ~0 headroom must not
+    // push the agent's payout past what escrow actually holds.
+    const job = await postJob({ type: JOB_TYPE_OPEN, pfc: USDC(1), ffc: USDC(1), ptc: USDC(1), tbc: USDC(1) });
+    await program.methods.claimJob().accounts({
+      agent: agent.publicKey, oracleConfig, job, walletProfile,
+      bondVault: bondPda(job), agentToken: agentAta, usdcMint: mint,
+      tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId, rent: SYSVAR_RENT_PUBKEY,
+    }).signers([agent]).rpc();
+    await program.methods.submitPlan(sha("plan"), USDC(1), USDC(1))
+      .accounts({ agent: agent.publicKey, job }).signers([agent]).rpc();
+    await program.methods.reportUsage(0, USDC(1))
+      .accounts({ oracleSigner: admin.publicKey, oracleConfig, job }).rpc();
+    await program.methods.acceptPlan()
+      .accounts({ employer: employer.publicKey, job }).signers([employer]).rpc();
+    await program.methods.reportUsage(1, USDC(1))
+      .accounts({ oracleSigner: admin.publicKey, oracleConfig, job }).rpc();
+    await program.methods.submitDeliverable(sha("d"), sha("u"))
+      .accounts({ agent: agent.publicKey, job }).signers([agent]).rpc();
+
+    await program.methods.acceptDeliverable(9, USDC(0.1)) // MAX_TIP requested
+      .accounts(finalizeAccounts(job, employer.publicKey)).signers([employer]).rpc();
+
+    const vault = await getAccount(conn, vaultPda(job));
+    assert.equal(vault.amount.toString(), "0", "vault fully drained, never overdrawn");
   });
 
   it("holds back the token portion at T1 and never the fees", async () => {
@@ -380,7 +421,7 @@ describe("acp v4", () => {
     await program.methods.submitDeliverable(sha("d"), sha("u"))
       .accounts({ agent: t1.publicKey, job }).signers([t1]).rpc();
 
-    await program.methods.acceptDeliverable(8).accounts({
+    await program.methods.acceptDeliverable(8, new BN(0)).accounts({
       ...finalizeAccounts(job, employer.publicKey),
       walletProfile: t1Profile,
       agentToken: t1Ata,

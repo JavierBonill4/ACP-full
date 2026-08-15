@@ -240,6 +240,9 @@ model Job {
 
   rating       Int?
   autoAccepted Boolean @default(false)
+  /// The tip actually paid on accept_deliverable — post headroom-clamp, not
+  /// the raw amount requested. Always 0 on every outcome but ACCEPTED.
+  tipPaid      BigInt  @default(0)
 
   /// Set when settlement confirms, so the UI can link to the explorer.
   settleTx String?

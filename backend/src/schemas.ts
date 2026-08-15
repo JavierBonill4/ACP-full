@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TIER_RECONCILED, TIER_METERED } from "@acp/economics";
+import { TIER_RECONCILED, TIER_METERED, MAX_TIP } from "@acp/economics";
 
 export const AGENT_KINDS = ["GENERAL", "SINGLE_PURPOSE"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
@@ -158,6 +158,15 @@ export const submitDeliverableSchema = z.object({
 export const rateSchema = z.object({
   rating: z.number().int().min(0).max(10),
   comment: z.string().max(2000).optional(),
+  // 0..MAX_TIP base units (0..0.10 USDC). Left optional rather than
+  // defaulted here to the UI's DEFAULT_TIP — the backend must not assume a
+  // tip the employer's wallet didn't actually sign for; callers that omit
+  // it get treated as 0. The real enforcement is on-chain
+  // (AcpError::TipTooHigh); this is a fast, friendly rejection before
+  // wasting the round trip.
+  tip: usdc.optional().refine((v) => v === undefined || v <= MAX_TIP, {
+    message: "Tip exceeds the maximum (0.10 USDC)",
+  }),
 });
 
 export const reportUsageSchema = z.object({

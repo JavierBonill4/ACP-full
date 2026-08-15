@@ -48,6 +48,8 @@ pub enum AcpError {
     UsageCapExceeded,
     #[msg("Rating must be between 0 and 10")]
     BadRating,
+    #[msg("Tip exceeds the maximum")]
+    TipTooHigh,
     #[msg("Escrow amounts must be non-zero")]
     ZeroEscrow,
     #[msg("Token account mint does not match the configured USDC mint")]

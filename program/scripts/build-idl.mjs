@@ -151,8 +151,11 @@ const instructions = [
   },
   // Every terminal transition shares the Finalize context.
   { name: "reject_plan", finalize: true, args: [] },
-  { name: "accept_deliverable", finalize: true, args: [arg("rating", "u8")] },
-  { name: "reject_deliverable", finalize: true, args: [] },
+  // There is no reject_deliverable — a submitted deliverable's payout is
+  // unconditional. accept_deliverable is the only settlement decision left
+  // to the employer, and it now carries an optional tip (0..MAX_TIP base
+  // units) drawn from the employer's own unused-escrow refund.
+  { name: "accept_deliverable", finalize: true, args: [arg("rating", "u8"), arg("tip", "u64")] },
   { name: "auto_accept", finalize: true, args: [] },
   { name: "expire_job", finalize: true, args: [] },
   { name: "cancel_job", finalize: true, args: [] },
@@ -295,6 +298,7 @@ const events = {
     field("employer_refund", "u64"),
     field("bond_slashed", "bool"),
     field("rating", "u8"),
+    field("tip", "u64"),
   ],
   HoldbackReleased: [field("job", "pubkey"), field("amount", "u64")],
   HoldbackClawedBack: [field("job", "pubkey"), field("amount", "u64")],
@@ -338,6 +342,7 @@ const ERRORS = [
   ["FeeCapExceeded", "Proposed fee exceeds the employer's funded ceiling"],
   ["UsageCapExceeded", "Reported usage exceeds the phase cap"],
   ["BadRating", "Rating must be between 0 and 10"],
+  ["TipTooHigh", "Tip exceeds the maximum"],
   ["ZeroEscrow", "Escrow amounts must be non-zero"],
   ["WrongMint", "Token account mint does not match the configured USDC mint"],
   ["WrongTokenOwner", "Token account owner does not match the expected party"],
