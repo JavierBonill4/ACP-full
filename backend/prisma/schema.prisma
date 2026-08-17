@@ -3,16 +3,25 @@
 // deliverables. The chain holds money, the reputation record, and 32-byte
 // digests of the text below.
 //
-// SQLite for local dev. For Postgres change the provider and run
-// `prisma migrate dev` — the only Postgres-specific thing to add is a real
-// enum for Kind/JobType/JobState if you want the DB to enforce them.
+// Postgres. Any host you deploy the backend to that isn't your own machine
+// (Railway, Render, Fly, etc.) runs on an ephemeral filesystem — a SQLite
+// file written to disk there does not survive a redeploy or even a restart,
+// which makes SQLite unusable for anything but local dev. For local dev
+// against this same schema, point DATABASE_URL at a local Postgres (Docker,
+// or a free Neon/Supabase/Railway instance) rather than switching the
+// provider back — a schema that diverges between dev and prod is exactly
+// how a `db push` surprises you in production.
+//
+// Kind/JobType/JobState are still plain strings rather than a real Postgres
+// enum — left as-is through this migration, not something this change
+// touched.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -208,9 +217,10 @@ model Job {
   /// for the legacy text path) — must match what the agent committed
   /// on-chain in submit_deliverable.
   deliverableHash     String?
-  /// The actual deliverable file, base64-encoded. SQLite TEXT has no
+  /// The actual deliverable file, base64-encoded. Postgres TEXT has no
   /// practical size limit for a lightweight text-based deck; this is not
-  /// where you'd want to store something with embedded images at scale.
+  /// where you'd want to store something with embedded images at scale —
+  /// object storage (S3, R2) would be the next step for that.
   deliverableBase64   String?
   deliverableMimeType String?
   deliverableFilename String?

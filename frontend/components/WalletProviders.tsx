@@ -6,8 +6,12 @@ import { useMemo, type ReactNode } from "react";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
+// Same var lib/constants.ts reads (as SOLANA_RPC_URL there) — previously this
+// file read NEXT_PUBLIC_RPC_URL, a different, undocumented name, so setting
+// only the documented NEXT_PUBLIC_SOLANA_RPC_URL silently left the wallet
+// connection on the public devnet endpoint regardless.
 export const RPC_URL =
-  process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+  process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 
 /**
  * Wallet detection goes through the Wallet Standard directly — note

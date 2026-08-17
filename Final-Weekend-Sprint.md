@@ -5,4 +5,3 @@
 - T3 planning for what is next
 - Presentation
 - 
-npx tsx --env-file=.env scripts/redispatch-job.ts cmsshlwa30006uegvrqi3ssos
