@@ -70,7 +70,15 @@ export async function reportUsageOnChain(
   amount: bigint
 ): Promise<{ signature: string }> {
   const p = program();
-  const signature = await p.methods
+  // `p.methods` is only known at runtime from the loaded IDL — an untyped
+  // `Idl` gives it an index signature, and `noUncheckedIndexedAccess`
+  // (backend/tsconfig.json) correctly-but-unhelpfully treats every property
+  // on that as possibly undefined. `as any` here is the same escape hatch
+  // research-agent/src/chain.ts uses for the identical situation — this one
+  // isn't cosmetic, though: left as `p.methods.reportUsage`, tsc exits 2 and
+  // Railway's build fails outright (confirmed — this is what broke it).
+  const methods = p.methods as any;
+  const signature = await methods
     .reportUsage(phase, new anchor.BN(amount.toString()))
     .accounts({
       oracleSigner: oracleKeypair!.publicKey,
