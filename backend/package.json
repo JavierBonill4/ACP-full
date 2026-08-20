@@ -3,13 +3,16 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.12"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
-    "start": "node --env-file-if-exists=.env dist/index.js",
+    "start": "node --env-file-if-exists=.env dist/src/index.js",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
     "db:push": "prisma db push --skip-generate",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && cp src/idl.json dist/src/idl.json"
   },
   "dependencies": {
     "@acp/economics": "*",

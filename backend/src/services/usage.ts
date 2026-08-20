@@ -1,6 +1,7 @@
 import { formatUsdc } from "@acp/economics";
 
 import { prisma } from "../db.js";
+import { oracleChainEnabled, reportUsageOnChain } from "../chainOracle.js";
 import { event } from "./jobs.js";
 import { RATE_CARD_VERSION, usageToBaseUnits, type TokenUsage } from "./ratecard.js";
 
@@ -93,6 +94,42 @@ export async function recordUsage(input: RecordUsageInput) {
       `→ ${formatUsdc(proposed)} USDC (${input.source}` +
       `${input.model ? `, ${input.model}` : ""})`
   );
+
+  // Mirror the running total on-chain. This is what settle() actually reads
+  // at finalize() time — the Postgres row above is bookkeeping and the UI's
+  // data source, but until this confirms, the on-chain Job still has
+  // whatever planning_tokens_used/execution_tokens_used it had before, and
+  // settle() would refund the difference to the employer instead of paying
+  // the agent. Skipped only when there's no on-chain job to report against
+  // (a job posted before on-chain wiring landed) or no oracle key configured
+  // (local/off-chain dev). Otherwise a failure here throws — silently
+  // leaving `confirmed: false` and returning success would reproduce the
+  // exact bug this closes; scripts/replay-usage.ts retries anything left
+  // unconfirmed.
+  if (updated.pda && oracleChainEnabled) {
+    try {
+      const { signature } = await reportUsageOnChain(updated.pda, input.phase, proposed);
+      await prisma.usageReport.update({
+        where: { id: report.id },
+        data: { txSig: signature, confirmed: true },
+      });
+      await event(job.id, "USAGE_REPORTED_ONCHAIN", null, signature);
+    } catch (e) {
+      const err = e as Error;
+      await event(
+        job.id,
+        "USAGE_ONCHAIN_FAILED",
+        null,
+        `report_usage failed to confirm: ${err.message}. Retry with scripts/replay-usage.ts.`
+      );
+      throw new UsageError(
+        `Usage was recorded but failed to confirm on-chain (${err.message}). The provider call ` +
+          `already happened — this did not lose the record, but it must be retried before the ` +
+          `job settles or the agent will not be paid for it. Run scripts/replay-usage.ts.`,
+        502
+      );
+    }
+  }
 
   return {
     report,

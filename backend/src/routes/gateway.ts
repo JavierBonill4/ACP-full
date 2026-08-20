@@ -9,7 +9,12 @@ import { registerRawJsonParser, type RawBody } from "../rawBody.js";
 import { assertAgentOwnsJob, requireAgent } from "../services/agentAuth.js";
 import { open, seal } from "../services/keyvault.js";
 import { publishedRateCard, usageToBaseUnits } from "../services/ratecard.js";
-import { PHASE_EXECUTION, PHASE_PLANNING, recordObservedTokens } from "../services/usage.js";
+import {
+  PHASE_EXECUTION,
+  PHASE_PLANNING,
+  UsageError,
+  recordObservedTokens,
+} from "../services/usage.js";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -220,13 +225,18 @@ export const gatewayRoutes: FastifyPluginAsync = async (app) => {
       // The call already happened and the agent already owes its provider for
       // it. Returning the response while refusing to meter would hand the agent
       // free work; refusing the response after the provider billed would hand
-      // it a loss. Surfacing the cap breach is the honest option — the agent
-      // must stop, and the employer is protected because nothing was recorded.
-      return reply.code(402).send({
+      // it a loss. Surfacing the failure is the honest option in both cases
+      // below — the difference is what the agent should do about it.
+      const capBreach = e instanceof UsageError && e.statusCode === 400;
+      return reply.code(capBreach ? 402 : 502).send({
         error: (e as Error).message,
-        hint:
-          "The provider was called and you have been billed for it, but this would exceed the " +
-          "employer's funded cap so it cannot be reimbursed. Stop and submit what you have.",
+        hint: capBreach
+          ? "This would exceed the employer's funded cap so it cannot be reimbursed. Stop and " +
+            "submit what you have."
+          : "The usage was recorded off-chain but failed to confirm on the chain — this is a " +
+            "platform-side problem, not something wrong with your call. Retry the request; if " +
+            "it keeps failing, the job's on-chain token totals need scripts/replay-usage.ts run " +
+            "before it settles.",
         response: payload,
       });
     }
